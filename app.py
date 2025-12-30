@@ -33,7 +33,6 @@ def get_google_sheet_connection():
     except Exception as e:
         return None
 
-# 데이터를 60초 동안 기억 (429 에러 방지)
 @st.cache_data(ttl=60)
 def load_data_from_sheet(worksheet_name):
     try:
@@ -69,6 +68,17 @@ def add_row_to_sheet(worksheet_name, row_data_list):
     except Exception as e:
         st.error(f"저장 실패: {e}")
         return False
+
+# [추가] 오답 번호 자동 정렬 함수
+def sort_numbers_string(text):
+    if not text: return ""
+    # 숫자만 추출
+    numbers = re.findall(r'\d+', str(text))
+    if not numbers: return text
+    # 정수 변환 후 정렬
+    sorted_nums = sorted([int(n) for n in numbers])
+    # 다시 문자열로 결합 (콤마로 구분)
+    return ", ".join(map(str, sorted_nums))
 
 # ==========================================
 # [설정 3] Gemini 2.0 Flash API (REST API)
@@ -109,11 +119,6 @@ def refine_text_ai(raw_text, context_type, student_name):
 # 메인 앱 화면
 # ==========================================
 
-# [세션 상태 초기화]
-if "memo_ai_res" not in st.session_state: st.session_state.memo_ai_res = ""
-if "rev_ai_res" not in st.session_state: st.session_state.rev_ai_res = ""
-if "counsel_ai_res" not in st.session_state: st.session_state.counsel_ai_res = ""
-
 menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학생 등록"])
 
 # ------------------------------------------
@@ -152,7 +157,6 @@ elif menu == "학생 관리 (상담/성적)":
             ban_txt = info['반'] if '반' in info else ''
             st.sidebar.info(f"**{info['이름']} ({ban_txt})**\n\n🏫 {info['출신중']} ➡️ {info['배정고']}\n🏠 {info['거주지']}")
 
-        # [핵심 수정] 탭 대신 라디오 버튼 메뉴바 사용 (튕김 현상 완벽 해결)
         st.write("")
         selected_tab = st.radio(
             "작업 선택", 
@@ -180,11 +184,12 @@ elif menu == "학생 관리 (상담/성적)":
             
             if st.button("✨ AI 변환 (선택 사항)", key="btn_c_ai"):
                 with st.spinner("AI가 문장을 다듬는 중..."):
-                    st.session_state.counsel_ai_res = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
+                    ai_result = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
+                    # [수정] 입력창에 강제로 값 밀어넣기
+                    st.session_state['final_c_input'] = ai_result 
                     st.rerun()
 
-            final_c = st.text_area("2. 최종 내용 (변환된 내용을 수정하거나, 직접 입력하세요)", 
-                                  value=st.session_state.counsel_ai_res, height=150, key="final_c_input")
+            final_c = st.text_area("2. 최종 내용 (변환된 내용을 수정하거나, 직접 입력하세요)", height=150, key="final_c_input")
 
             if st.button("💾 상담 내용 저장", type="primary", key="btn_c_save"):
                 content_to_save = final_c if final_c.strip() else raw_c
@@ -192,7 +197,8 @@ elif menu == "학생 관리 (상담/성적)":
                 if content_to_save:
                     if add_row_to_sheet("counseling", [selected_student, str(c_date), content_to_save]):
                         st.success("저장 완료!")
-                        st.session_state.counsel_ai_res = "" 
+                        # 저장 후 초기화
+                        if 'final_c_input' in st.session_state: del st.session_state['final_c_input']
                         st.rerun()
                 else:
                     st.warning("내용이 없습니다.")
@@ -209,11 +215,10 @@ elif menu == "학생 관리 (상담/성적)":
 
             st.markdown("##### 📝 주간 과제 & 점수")
             cc1, cc2, cc3 = st.columns(3)
-            
             hw = cc1.number_input("수행도(%)", 0, 100, 80)
             w_sc = cc2.number_input("주간 과제 점수", 0, 100, 0)
             w_av = cc3.number_input("주간과제 평균점수", 0, 100, 0)
-            wrong = st.text_input("주간 과제 오답 번호 (띄어쓰기 구분)", placeholder="예: 13 15 22")
+            wrong = st.text_input("주간 과제 오답 번호 (막 적어도 자동 정렬됨)", placeholder="예: 3 1 2")
             
             st.divider()
 
@@ -223,10 +228,12 @@ elif menu == "학생 관리 (상담/성적)":
             
             if st.button("✨ 특이사항 AI 변환", key="btn_m_ai"):
                 with st.spinner("AI 변환 중..."):
-                    st.session_state.memo_ai_res = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
+                    ai_result = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
+                    # [수정] 강제 업데이트
+                    st.session_state['final_m_input'] = ai_result
                     st.rerun()
 
-            final_m = st.text_area("최종 특이사항 (수정 가능)", value=st.session_state.memo_ai_res, height=80, key="final_m_input")
+            final_m = st.text_area("최종 특이사항 (수정 가능)", height=80, key="final_m_input")
 
             st.divider()
 
@@ -235,17 +242,19 @@ elif menu == "학생 관리 (상담/성적)":
             cc4, cc5 = st.columns(2)
             a_sc = cc4.number_input("성취도 평가 점수", 0, 100, 0)
             a_av = cc5.number_input("성취도 평가 점수 평균", 0, 100, 0)
-            a_wrong = st.text_input("성취도평가 오답번호", placeholder="예: 21 29 30")
+            a_wrong = st.text_input("성취도평가 오답번호 (막 적어도 자동 정렬됨)", placeholder="예: 21 29 30")
             
             st.markdown("##### 📝 성취도 총평")
             raw_r = st.text_area("총평 메모 (대충 적기)", height=70, key="raw_r_input")
             
             if st.button("✨ 총평 AI 변환", key="btn_r_ai"):
                 with st.spinner("AI 변환 중..."):
-                    st.session_state.rev_ai_res = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
+                    ai_result = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
+                    # [수정] 강제 업데이트
+                    st.session_state['final_r_input'] = ai_result
                     st.rerun()
             
-            final_r = st.text_area("최종 총평 (수정 가능)", value=st.session_state.rev_ai_res, height=80, key="final_r_input")
+            final_r = st.text_area("최종 총평 (수정 가능)", height=80, key="final_r_input")
 
             st.divider()
             
@@ -254,12 +263,17 @@ elif menu == "학생 관리 (상담/성적)":
                 save_m = final_m if final_m.strip() else raw_m
                 save_r = final_r if final_r.strip() else raw_r
                 
-                row = [selected_student, period, hw, w_sc, w_av, wrong, save_m, a_sc, a_av, a_wrong, save_r]
+                # [수정] 저장 직전에 오답 번호 자동 정렬 실행!
+                sorted_wrong = sort_numbers_string(wrong)
+                sorted_a_wrong = sort_numbers_string(a_wrong)
+                
+                row = [selected_student, period, hw, w_sc, w_av, sorted_wrong, save_m, a_sc, a_av, sorted_a_wrong, save_r]
                 
                 if add_row_to_sheet("weekly", row):
-                    st.success("✅ 저장 완료되었습니다!")
-                    st.session_state.memo_ai_res = ""
-                    st.session_state.rev_ai_res = ""
+                    st.success(f"✅ 저장 완료! 오답번호가 '{sorted_wrong}' / '{sorted_a_wrong}' 순서로 정렬되었습니다.")
+                    # 입력창 초기화
+                    if 'final_m_input' in st.session_state: del st.session_state['final_m_input']
+                    if 'final_r_input' in st.session_state: del st.session_state['final_r_input']
                     st.rerun()
 
 
