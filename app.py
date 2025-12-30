@@ -65,7 +65,7 @@ def add_row_to_sheet(worksheet_name, row_data_list):
 try:
     genai.configure(api_key=st.secrets["GENAI_API_KEY"])
     # [수정] 2.5는 없습니다. 1.5-flash가 최신 맞습니다. (requirements.txt 업데이트 필수)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+    gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 except Exception as e:
     gemini_model = None
 
@@ -307,3 +307,4 @@ elif menu == "학생 관리 (상담/성적)":
                         st.warning("기간을 선택해주세요.")
                 else:
                     st.info("데이터가 없습니다.")
+
