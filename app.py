@@ -33,13 +33,13 @@ def get_google_sheet_connection():
     except Exception as e:
         return None
 
+# [핵심 수정] 60초(ttl=60) 동안 데이터를 기억해서 구글 괴롭히지 않기!
+@st.cache_data(ttl=60)
 def load_data_from_sheet(worksheet_name):
     try:
         client = get_google_sheet_connection()
-        if not client: 
-            st.error("❌ 구글 시트 서버와 연결할 수 없습니다. (인증 실패)")
-            return pd.DataFrame()
-            
+        if not client: return pd.DataFrame()
+        
         sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
         data = sheet.get_all_values()
         
@@ -56,8 +56,7 @@ def load_data_from_sheet(worksheet_name):
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
     except Exception as e:
-        # [수정] 여기가 핵심입니다! 에러를 숨기지 않고 보여줍니다.
-        st.error(f"🚨 데이터 로드 오류 발생: {e}")
+        # 에러가 나도 조용히 빈 데이터프레임 반환 (화면 멈춤 방지)
         return pd.DataFrame()
 
 def add_row_to_sheet(worksheet_name, row_data_list):
@@ -66,6 +65,9 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         if not client: return False
         sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
         sheet.append_row(row_data_list)
+        
+        # [핵심] 저장했으면 기억해둔 데이터를 지우고 새로 가져오게 함
+        load_data_from_sheet.clear()
         return True
     except Exception as e:
         st.error(f"저장 실패: {e}")
@@ -156,9 +158,7 @@ elif menu == "학생 관리 (상담/성적)":
     df_students = load_data_from_sheet("students")
     
     if df_students.empty:
-        # [수정] 여기가 중요합니다! 에러 메시지가 화면에 떠야 원인을 알 수 있습니다.
-        # 만약 위의 st.error가 떴다면 그 내용을 알려주세요.
-        st.warning("학생 데이터가 없습니다. (구글 시트 'students' 탭을 확인하거나 연결 상태를 점검하세요)")
+        st.warning("학생 데이터가 없습니다. (구글 시트 연결 상태를 점검하거나 잠시 후 다시 시도하세요)")
     else:
         student_list = df_students["이름"].tolist()
         selected_student = st.sidebar.selectbox("학생 선택", student_list)
