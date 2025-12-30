@@ -69,15 +69,12 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         st.error(f"저장 실패: {e}")
         return False
 
-# [추가] 오답 번호 자동 정렬 함수
+# 오답 번호 자동 정렬 함수
 def sort_numbers_string(text):
     if not text: return ""
-    # 숫자만 추출
     numbers = re.findall(r'\d+', str(text))
     if not numbers: return text
-    # 정수 변환 후 정렬
     sorted_nums = sorted([int(n) for n in numbers])
-    # 다시 문자열로 결합 (콤마로 구분)
     return ", ".join(map(str, sorted_nums))
 
 # ==========================================
@@ -185,7 +182,6 @@ elif menu == "학생 관리 (상담/성적)":
             if st.button("✨ AI 변환 (선택 사항)", key="btn_c_ai"):
                 with st.spinner("AI가 문장을 다듬는 중..."):
                     ai_result = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
-                    # [수정] 입력창에 강제로 값 밀어넣기
                     st.session_state['final_c_input'] = ai_result 
                     st.rerun()
 
@@ -197,7 +193,6 @@ elif menu == "학생 관리 (상담/성적)":
                 if content_to_save:
                     if add_row_to_sheet("counseling", [selected_student, str(c_date), content_to_save]):
                         st.success("저장 완료!")
-                        # 저장 후 초기화
                         if 'final_c_input' in st.session_state: del st.session_state['final_c_input']
                         st.rerun()
                 else:
@@ -229,7 +224,6 @@ elif menu == "학생 관리 (상담/성적)":
             if st.button("✨ 특이사항 AI 변환", key="btn_m_ai"):
                 with st.spinner("AI 변환 중..."):
                     ai_result = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
-                    # [수정] 강제 업데이트
                     st.session_state['final_m_input'] = ai_result
                     st.rerun()
 
@@ -250,7 +244,6 @@ elif menu == "학생 관리 (상담/성적)":
             if st.button("✨ 총평 AI 변환", key="btn_r_ai"):
                 with st.spinner("AI 변환 중..."):
                     ai_result = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
-                    # [수정] 강제 업데이트
                     st.session_state['final_r_input'] = ai_result
                     st.rerun()
             
@@ -258,20 +251,17 @@ elif menu == "학생 관리 (상담/성적)":
 
             st.divider()
             
-            # [전체 저장 버튼]
             if st.button("💾 전체 성적 및 평가 저장", type="primary", use_container_width=True):
                 save_m = final_m if final_m.strip() else raw_m
                 save_r = final_r if final_r.strip() else raw_r
                 
-                # [수정] 저장 직전에 오답 번호 자동 정렬 실행!
                 sorted_wrong = sort_numbers_string(wrong)
                 sorted_a_wrong = sort_numbers_string(a_wrong)
                 
                 row = [selected_student, period, hw, w_sc, w_av, sorted_wrong, save_m, a_sc, a_av, sorted_a_wrong, save_r]
                 
                 if add_row_to_sheet("weekly", row):
-                    st.success(f"✅ 저장 완료! 오답번호가 '{sorted_wrong}' / '{sorted_a_wrong}' 순서로 정렬되었습니다.")
-                    # 입력창 초기화
+                    st.success(f"✅ 저장 완료!")
                     if 'final_m_input' in st.session_state: del st.session_state['final_m_input']
                     if 'final_r_input' in st.session_state: del st.session_state['final_r_input']
                     st.rerun()
@@ -309,33 +299,4 @@ elif menu == "학생 관리 (상담/성적)":
                         c1 = (base.mark_line(color='#29b5e8').encode(y=alt.Y('주간점수', scale=y_fix)) + 
                               base.mark_point(color='#29b5e8', size=100).encode(y='주간점수') + 
                               base.mark_text(dy=-15, fontSize=14, color='#29b5e8', fontWeight='bold').encode(y='주간점수', text='주간점수') + 
-                              base.mark_line(color='gray', strokeDash=[5,5]).encode(y='주간평균'))
-                        st.altair_chart(c1, use_container_width=True)
-
-                        if "성취도점수" in rep.columns and rep["성취도점수"].sum() > 0:
-                            st.subheader("2️⃣ 성취도 평가 결과")
-                            ach_d = rep[rep["성취도점수"] > 0]
-                            base_ach = alt.Chart(ach_d).encode(x=alt.X('시기', sort=None))
-                            
-                            c2 = (base_ach.mark_line(color='#ff6c6c').encode(y=alt.Y('성취도점수', scale=y_fix)) + 
-                                  base_ach.mark_point(color='#ff6c6c', size=100).encode(y='성취도점수') + 
-                                  base_ach.mark_text(dy=-15, fontSize=14, color='#ff6c6c', fontWeight='bold').encode(y='성취도점수', text='성취도점수') + 
-                                  base_ach.mark_line(color='gray', strokeDash=[5,5]).encode(y='성취도평균'))
-                            st.altair_chart(c2, use_container_width=True)
-
-                        st.subheader("3️⃣ 상세 학습 내역")
-                        cols = ["시기", "과제", "주간점수", "주간평균", "오답번호", "특이사항", "성취도점수", "성취도평균", "성취도오답"]
-                        disp = rep[[c for c in cols if c in rep.columns]].copy()
-                        
-                        rename_map = {"시기":"시기", "과제":"과제(%)", "주간점수":"주간과제점수", "주간평균":"반평균", 
-                                      "오답번호":"주간과제오답", "특이사항":"코멘트", "성취도점수":"성취도평가점수", "성취도평균":"성취도평균", "성취도오답":"성취도오답"}
-                        disp.rename(columns=rename_map, inplace=True)
-                        st.table(disp.set_index("시기"))
-
-                        for i, r in rep.iterrows():
-                            if r.get('총평'):
-                                st.info(f"**[{r['시기']} 성취도 총평]**\n\n{r['총평']}")
-                    else:
-                        st.warning("기간을 선택해주세요.")
-                else:
-                    st.info("데이터가 없습니다.")
+                              base.mark_line(color='
