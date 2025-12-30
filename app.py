@@ -2,11 +2,17 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import requests # 구글 라이브러리 대신 requests 직접 사용 (404 해결책)
+import requests
 import json
 import datetime
 import altair as alt
 import re
+
+# ==========================================
+# [중요] 페이지 설정은 무조건 맨 처음에 와야 함!
+# ==========================================
+st.set_page_config(page_title="강북청솔 학생 관리", layout="wide")
+st.title("👨‍🏫 김성만 선생님의 학생 관리 시스템")
 
 # ==========================================
 # [설정 1] 구글 시트 ID
@@ -61,7 +67,7 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         return False
 
 # ==========================================
-# [설정 3] Gemini 2.0 Flash API 호출 (REST API 방식)
+# [설정 3] Gemini 2.0 Flash API 호출 (REST API)
 # ==========================================
 def refine_text_ai(raw_text, context_type, student_name):
     if not raw_text:
@@ -70,7 +76,7 @@ def refine_text_ai(raw_text, context_type, student_name):
     try:
         api_key = st.secrets["GENAI_API_KEY"]
         
-        # [핵심] Gemini 2.0 Flash Experimental 모델 직접 호출
+        # Gemini 2.0 Flash (Experimental) 모델 주소
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
         
         headers = {
@@ -96,7 +102,6 @@ def refine_text_ai(raw_text, context_type, student_name):
             }]
         }
         
-        # requests로 직접 통신 (라이브러리 버전 문제 회피)
         response = requests.post(url, headers=headers, data=json.dumps(data))
         
         if response.status_code == 200:
@@ -109,6 +114,4 @@ def refine_text_ai(raw_text, context_type, student_name):
         return f"통신 오류 발생: {e}"
 
 # ==========================================
-# 메인 앱 화면
-# ==========================================
-st.set_page_
+# 메인 앱 화면 (설정 부분
