@@ -152,10 +152,18 @@ elif menu == "학생 관리 (상담/성적)":
             ban_txt = info['반'] if '반' in info else ''
             st.sidebar.info(f"**{info['이름']} ({ban_txt})**\n\n🏫 {info['출신중']} ➡️ {info['배정고']}\n🏠 {info['거주지']}")
 
-        tab1, tab2, tab3 = st.tabs(["🗣️ 상담 일지", "📊 성적 입력", "👨‍👩‍👧‍👦 리포트"])
+        # [핵심 수정] 탭 대신 라디오 버튼 메뉴바 사용 (튕김 현상 완벽 해결)
+        st.write("")
+        selected_tab = st.radio(
+            "작업 선택", 
+            ["🗣️ 상담 일지", "📊 성적 입력", "👨‍👩‍👧‍👦 리포트"], 
+            horizontal=True,
+            label_visibility="collapsed"
+        )
+        st.divider()
 
-        # --- [탭 1] 상담 일지 ---
-        with tab1:
+        # --- [화면 1] 상담 일지 ---
+        if selected_tab == "🗣️ 상담 일지":
             st.subheader(f"{selected_student} 상담 기록")
             df_c = load_data_from_sheet("counseling")
             with st.expander("📂 이전 상담 내역"):
@@ -166,8 +174,6 @@ elif menu == "학생 관리 (상담/성적)":
                         st.markdown(f"**🗓️ {r['날짜']}**")
                         st.info(r['내용'])
 
-            st.divider()
-            
             st.write("#### ✍️ 새로운 상담 입력")
             c_date = st.date_input("날짜", datetime.date.today())
             raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80, key="raw_c_input")
@@ -177,12 +183,10 @@ elif menu == "학생 관리 (상담/성적)":
                     st.session_state.counsel_ai_res = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
                     st.rerun()
 
-            # AI 결과가 있으면 그거 보여주고, 없으면 빈칸 (사용자가 직접 채우기 가능)
             final_c = st.text_area("2. 최종 내용 (변환된 내용을 수정하거나, 직접 입력하세요)", 
                                   value=st.session_state.counsel_ai_res, height=150, key="final_c_input")
 
             if st.button("💾 상담 내용 저장", type="primary", key="btn_c_save"):
-                # 최종 칸에 내용이 있으면 그거 저장, 없으면 원본 메모 저장
                 content_to_save = final_c if final_c.strip() else raw_c
                 
                 if content_to_save:
@@ -194,8 +198,8 @@ elif menu == "학생 관리 (상담/성적)":
                     st.warning("내용이 없습니다.")
 
 
-        # --- [탭 2] 성적 입력 (UI 복원 및 용어 수정) ---
-        with tab2:
+        # --- [화면 2] 성적 입력 ---
+        elif selected_tab == "📊 성적 입력":
             st.subheader("📊 성적 데이터 입력")
             
             c1, c2 = st.columns(2)
@@ -205,7 +209,7 @@ elif menu == "학생 관리 (상담/성적)":
 
             st.markdown("##### 📝 주간 과제 & 점수")
             cc1, cc2, cc3 = st.columns(3)
-            # [수정] 선생님이 요청하신 라벨명
+            
             hw = cc1.number_input("수행도(%)", 0, 100, 80)
             w_sc = cc2.number_input("주간 과제 점수", 0, 100, 0)
             w_av = cc3.number_input("주간과제 평균점수", 0, 100, 0)
@@ -229,7 +233,6 @@ elif menu == "학생 관리 (상담/성적)":
             # [성취도 평가 섹션]
             st.markdown("##### 🏆 성취도 평가")
             cc4, cc5 = st.columns(2)
-            # [수정] 선생님이 요청하신 라벨명
             a_sc = cc4.number_input("성취도 평가 점수", 0, 100, 0)
             a_av = cc5.number_input("성취도 평가 점수 평균", 0, 100, 0)
             a_wrong = st.text_input("성취도평가 오답번호", placeholder="예: 21 29 30")
@@ -248,7 +251,6 @@ elif menu == "학생 관리 (상담/성적)":
             
             # [전체 저장 버튼]
             if st.button("💾 전체 성적 및 평가 저장", type="primary", use_container_width=True):
-                # 최종 칸이 비어있으면 원본 메모를 사용 (AI 안 썼을 경우 대비)
                 save_m = final_m if final_m.strip() else raw_m
                 save_r = final_r if final_r.strip() else raw_r
                 
@@ -256,14 +258,13 @@ elif menu == "학생 관리 (상담/성적)":
                 
                 if add_row_to_sheet("weekly", row):
                     st.success("✅ 저장 완료되었습니다!")
-                    # 입력창 초기화
                     st.session_state.memo_ai_res = ""
                     st.session_state.rev_ai_res = ""
                     st.rerun()
 
 
-        # --- [탭 3] 학부모 리포트 ---
-        with tab3:
+        # --- [화면 3] 학부모 리포트 ---
+        elif selected_tab == "👨‍👩‍👧‍👦 리포트":
             st.header(f"📑 {selected_student} 학생 학습 리포트")
             st.divider()
 
