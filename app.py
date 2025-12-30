@@ -31,8 +31,6 @@ def load_data_from_sheet(worksheet_name):
         client = get_google_sheet_connection()
         if not client: return pd.DataFrame()
         sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
-        
-        # 데이터 누락 방지를 위해 문자열로 가져옴
         data = sheet.get_all_values()
         
         if len(data) < 2: return pd.DataFrame()
@@ -41,7 +39,6 @@ def load_data_from_sheet(worksheet_name):
         rows = data[1:]
         df = pd.DataFrame(rows, columns=headers)
         
-        # 숫자 컬럼 변환
         numeric_cols = ['주간점수', '주간평균', '성취도점수', '성취도평균', '과제']
         for col in numeric_cols:
             if col in df.columns:
@@ -63,13 +60,14 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         return False
 
 # ==========================================
-# [설정 3] Gemini AI 설정 (Flash-002 적용)
+# [설정 3] Gemini AI 설정 (가장 안전한 모델)
 # ==========================================
 try:
     genai.configure(api_key=st.secrets["GENAI_API_KEY"])
     
-    # [수정] 선생님이 원하시는 최신 업그레이드 모델 적용!
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash-002')
+    # [수정] 404 에러 해결을 위해 가장 안정적인 'gemini-1.5-flash' 사용
+    # 만약 이것도 안 되면 'gemini-1.5-flash-001' 로 바꿔보세요.
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
     
 except Exception as e:
     gemini_model = None
@@ -89,7 +87,7 @@ def refine_text_ai(raw_text, context_type):
         response = gemini_model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
-        return f"AI 오류: {e}"
+        return f"AI 오류 발생: {e}"
 
 # ==========================================
 # 메인 앱 화면
@@ -159,21 +157,19 @@ elif menu == "학생 관리 (상담/성적)":
             st.write("#### ✍️ 새로운 상담 입력")
             c_date = st.date_input("날짜", datetime.date.today())
             
-            # 입력창
-            raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80, key="input_c")
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80, key="input_c")
+            with c2:
+                st.write("")
+                st.write("")
+                if st.button("✨ AI 다듬기", key="btn_c"):
+                    if raw_c:
+                        with st.spinner("다듬는 중..."):
+                            st.session_state.counsel_result = refine_text_ai(raw_c, "학부모 상담 일지")
             
-            # AI 버튼
-            if st.button("✨ AI 다듬기 (Flash-002)", key="btn_c"):
-                if raw_c:
-                    with st.spinner("문장을 다듬고 있습니다..."):
-                        st.session_state.counsel_result = refine_text_ai(raw_c, "학부모 상담 일지")
-                else:
-                    st.warning("내용을 입력해주세요.")
-
-            # 결과창
             final_c = st.text_area("2. 최종 저장될 내용 (수정 가능)", value=st.session_state.counsel_result, height=150)
 
-            # 저장 버튼
             if st.button("💾 상담 내용 저장", type="primary"):
                 content_to_save = final_c if final_c else raw_c
                 if content_to_save:
@@ -200,11 +196,15 @@ elif menu == "학생 관리 (상담/성적)":
             wrong = st.text_input("주간 오답 (띄어쓰기 구분)", placeholder="예: 13 15 22")
             
             # 특이사항 AI
-            raw_m = st.text_area("특이사항 메모 (대충 적기)", height=60, key="input_m")
-            if st.button("✨ 특이사항 다듬기", key="btn_m"):
-                if raw_m:
-                    with st.spinner("다듬는 중..."):
-                        st.session_state.memo_result = refine_text_ai(raw_m, "학습 태도 특이사항")
+            mc1, mc2 = st.columns([3, 1])
+            with mc1:
+                raw_m = st.text_area("특이사항 메모 (대충 적기)", height=60, key="input_m")
+            with mc2:
+                st.write("")
+                if st.button("✨ 특이사항 다듬기", key="btn_m"):
+                    if raw_m:
+                        with st.spinner("다듬는 중..."):
+                            st.session_state.memo_result = refine_text_ai(raw_m, "학습 태도 특이사항")
             
             final_m = st.text_area("최종 특이사항", value=st.session_state.memo_result, height=80)
 
@@ -218,11 +218,15 @@ elif menu == "학생 관리 (상담/성적)":
                 a_wrong = st.text_input("성취도 오답 (띄어쓰기 구분)", placeholder="예: 21 29 30")
                 
                 # 총평 AI
-                raw_r = st.text_area("총평 메모 (대충 적기)", height=60, key="input_r")
-                if st.button("✨ 총평 다듬기", key="btn_r"):
-                    if raw_r:
-                        with st.spinner("다듬는 중..."):
-                            st.session_state.rev_result = refine_text_ai(raw_r, "성취도 평가 총평")
+                rc1, rc2 = st.columns([3, 1])
+                with rc1:
+                    raw_r = st.text_area("총평 메모 (대충 적기)", height=60, key="input_r")
+                with rc2:
+                    st.write("")
+                    if st.button("✨ 총평 다듬기", key="btn_r"):
+                        if raw_r:
+                            with st.spinner("다듬는 중..."):
+                                st.session_state.rev_result = refine_text_ai(raw_r, "성취도 평가 총평")
                 
                 final_r = st.text_area("최종 총평", value=st.session_state.rev_result, height=100)
 
