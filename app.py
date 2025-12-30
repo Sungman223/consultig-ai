@@ -1,15 +1,3 @@
-선생님! 😅 **제가 쓴 글(한글 설명)을 복사해서 붙여넣으시면 안 됩니다!**
-보내주신 사진을 보니, 코드 앞뒤로 제 설명글이 붙어있어서 에러가 나고 있습니다.
-
-**[따라해 주세요]**
-
-1. `app.py`에 있는 내용을 **전부 지우세요.**
-2. 아래 **검은색 상자 오른쪽 위에 있는 'Copy' 버튼(📄)**을 눌러서 복사하세요.
-3. 그 다음 `app.py`에 붙여넣으세요. (오직 영어 코드만 있어야 합니다.)
-
-### 👨‍💻 최종_완성_자동비우기_v31.py
-
-```python
 import streamlit as st
 import pandas as pd
 import gspread
@@ -96,9 +84,7 @@ def clean_school_name(text, target_type="middle"):
     """학교 이름 강력 자동 완성"""
     if not text: return ""
     text = text.strip()
-    # 이미 있는 접미사 제거
     root_name = re.sub(r'(고등학교|중학교|고등|중학|고|중)$', '', text)
-    
     if target_type == "middle":
         return root_name + "중"
     else:
@@ -151,11 +137,11 @@ def refine_text_ai(raw_text, context_type, student_name):
 menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학생 등록"])
 
 # ------------------------------------------
-# 1. 신규 학생 등록 (저장 후 자동 비우기)
+# 1. 신규 학생 등록
 # ------------------------------------------
 if menu == "신규 학생 등록":
     st.header("📝 신규 학생 등록")
-    st.info("💡 팁: '풍생'만 입력해도 '풍생중', '풍생고'로 변환됩니다. **저장 후 입력창은 자동으로 비워집니다.**")
+    st.info("💡 팁: '풍생'만 입력해도 '풍생중', '풍생고'로 변환됩니다. **저장 후 자동으로 비워집니다.**")
     
     with st.form("new_student_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
@@ -306,7 +292,7 @@ elif menu == "학생 관리 (상담/성적)":
                 row = [selected_student, period, hw, w_sc, w_av, sorted_wrong, save_m, a_sc, a_av, sorted_a_wrong, save_r]
                 
                 if add_row_to_sheet("weekly", row):
-                    st.success(f"✅ 저장 완료! 입력창을 비웠습니다.")
+                    st.success(f"✅ 저장 완료! 다음 학생을 위해 입력창을 비웠습니다.")
                     
                     # [핵심] 저장 성공 시 입력창 강제 초기화 (월, 주차는 유지)
                     st.session_state['g_hw'] = 80
@@ -386,5 +372,3 @@ elif menu == "학생 관리 (상담/성적)":
                         st.warning("기간을 선택해주세요.")
                 else:
                     st.info("데이터가 없습니다.")
-
-```
