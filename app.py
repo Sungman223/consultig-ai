@@ -73,22 +73,35 @@ def add_row_to_sheet(worksheet_name, row_data_list):
 # [유틸리티] 데이터 정리 함수들
 # ------------------------------------------
 def sort_numbers_string(text):
-    """오답 번호 자동 정렬 (예: '3 1 2' -> '1, 2, 3')"""
+    """오답 번호 자동 정렬"""
     if not text: return ""
     numbers = re.findall(r'\d+', str(text))
     if not numbers: return text
     sorted_nums = sorted([int(n) for n in numbers])
     return ", ".join(map(str, sorted_nums))
 
-def clean_school_name(text):
-    """학교 이름 자동 줄임 (예: 풍생고등학교 -> 풍생고)"""
+def format_middle_school(text):
+    """중학교 이름 자동 완성 (풍생 -> 풍생중, 풍생중학교 -> 풍생중)"""
     if not text: return ""
-    text = text.replace("등학교", "고")
-    text = text.replace("중학교", "중")
-    return text.strip()
+    text = text.strip()
+    if text.endswith("중학교"):
+        return text.replace("중학교", "중")
+    if not text.endswith("중"):
+        return text + "중"
+    return text
+
+def format_high_school(text):
+    """고등학교 이름 자동 완성 (풍생 -> 풍생고, 풍생고등학교 -> 풍생고)"""
+    if not text: return ""
+    text = text.strip()
+    if text.endswith("고등학교"):
+        return text.replace("고등학교", "고")
+    if not text.endswith("고"):
+        return text + "고"
+    return text
 
 def clean_class_name(text):
-    """반 이름 대문자 변환 (예: m1 -> M1)"""
+    """반 이름 대문자 변환"""
     if not text: return ""
     return text.upper().strip()
 
@@ -134,26 +147,26 @@ def refine_text_ai(raw_text, context_type, student_name):
 menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학생 등록"])
 
 # ------------------------------------------
-# 1. 신규 학생 등록 (자동 변환 적용)
+# 1. 신규 학생 등록 (학교명 자동완성 적용)
 # ------------------------------------------
 if menu == "신규 학생 등록":
     st.header("📝 신규 학생 등록")
-    st.info("💡 학교 이름은 '등학교/중학교'를 입력해도 자동으로 '고/중'으로 줄여서 저장됩니다. 반 이름은 대문자로 자동 변환됩니다.")
+    st.info("💡 팁: 학교 이름에 '풍생'만 적어도 자동으로 '풍생중', '풍생고'로 저장됩니다.")
     
     with st.form("new_student_form"):
         col1, col2 = st.columns(2)
         name = col1.text_input("학생 이름")
-        ban = col2.text_input("반 (예: M1)")
-        origin = st.text_input("출신 중학교 (예: 부산중)")
-        target = st.text_input("배정 예정 고등학교 (예: 분당고)")
+        ban = col2.text_input("반 (예: m1 -> M1)")
+        origin = st.text_input("출신 중학교 (예: 풍생 -> 풍생중)")
+        target = st.text_input("배정 예정 고등학교 (예: 풍생 -> 풍생고)")
         addr = st.text_input("거주지 (대략적)")
         
         if st.form_submit_button("💾 학생 등록"):
             if name:
                 # [핵심] 입력값 자동 표준화
                 clean_ban = clean_class_name(ban)
-                clean_origin = clean_school_name(origin)
-                clean_target = clean_school_name(target)
+                clean_origin = format_middle_school(origin) # 중학교 자동완성
+                clean_target = format_high_school(target)   # 고등학교 자동완성
                 
                 if add_row_to_sheet("students", [name, clean_ban, clean_origin, clean_target, addr]):
                     st.success(f"{name} 학생 등록 완료! ({clean_ban}, {clean_origin} -> {clean_target})")
@@ -167,12 +180,9 @@ elif menu == "학생 관리 (상담/성적)":
     if df_students.empty:
         st.warning("학생 데이터가 없습니다. (구글 시트 연결 확인 필요)")
     else:
-        # [핵심] 사이드바에 이름과 반을 함께 표시
-        # 표시용 리스트 생성 (예: "홍길동 (M1)")
+        # 사이드바 리스트 (이름 + 반)
         student_display_list = [f"{row['이름']} ({row['반']})" for idx, row in df_students.iterrows()]
         selected_display = st.sidebar.selectbox("학생 선택", student_display_list)
-        
-        # 선택된 값에서 이름만 추출 (괄호 앞부분)
         selected_student = selected_display.split(" (")[0]
         
         rows = df_students[df_students["이름"] == selected_student]
@@ -182,6 +192,7 @@ elif menu == "학생 관리 (상담/성적)":
             st.sidebar.info(f"**{info['이름']} ({ban_txt})**\n\n🏫 {info['출신중']} ➡️ {info['배정고']}\n🏠 {info['거주지']}")
 
         st.write("")
+        # 고정형 메뉴바 (튕김 방지)
         selected_tab = st.radio(
             "작업 선택", 
             ["🗣️ 상담 일지", "📊 성적 입력", "👨‍👩‍👧‍👦 리포트"], 
@@ -270,87 +281,3 @@ elif menu == "학생 관리 (상담/성적)":
             
             if st.button("✨ 총평 AI 변환", key="btn_r_ai"):
                 with st.spinner("AI 변환 중..."):
-                    ai_result = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
-                    st.session_state['final_r_input'] = ai_result
-                    st.rerun()
-            
-            final_r = st.text_area("최종 총평 (수정 가능)", height=80, key="final_r_input")
-
-            st.divider()
-            
-            if st.button("💾 전체 성적 및 평가 저장", type="primary", use_container_width=True):
-                save_m = final_m if final_m.strip() else raw_m
-                save_r = final_r if final_r.strip() else raw_r
-                
-                sorted_wrong = sort_numbers_string(wrong)
-                sorted_a_wrong = sort_numbers_string(a_wrong)
-                
-                row = [selected_student, period, hw, w_sc, w_av, sorted_wrong, save_m, a_sc, a_av, sorted_a_wrong, save_r]
-                
-                if add_row_to_sheet("weekly", row):
-                    st.success(f"✅ 저장 완료!")
-                    if 'final_m_input' in st.session_state: del st.session_state['final_m_input']
-                    if 'final_r_input' in st.session_state: del st.session_state['final_r_input']
-                    st.rerun()
-
-
-        # --- [화면 3] 학부모 리포트 ---
-        elif selected_tab == "👨‍👩‍👧‍👦 리포트":
-            st.header(f"📑 {selected_student} 학생 학습 리포트")
-            st.divider()
-
-            df_w = load_data_from_sheet("weekly")
-            if not df_w.empty:
-                my_w = df_w[df_w["이름"] == selected_student]
-                if not my_w.empty:
-                    periods = my_w["시기"].tolist()
-                    sel_p = st.multiselect("기간 선택:", periods, default=periods)
-                    
-                    if sel_p:
-                        rep = my_w[my_w["시기"].isin(sel_p)].copy()
-
-                        def format_wrong(x):
-                            s = str(x).strip()
-                            if not s or s == '0': return ""
-                            s = s.replace(',', ' ')
-                            parts = s.split()
-                            return ', '.join(parts)
-
-                        if '오답번호' in rep.columns: rep['오답번호'] = rep['오답번호'].apply(format_wrong)
-                        if '성취도오답' in rep.columns: rep['성취도오답'] = rep['성취도오답'].apply(format_wrong)
-
-                        st.subheader("1️⃣ 주간 과제 성취도")
-                        base = alt.Chart(rep).encode(x=alt.X('시기', sort=None))
-                        y_fix = alt.Scale(domain=[0, 100])
-                        
-                        c1 = (base.mark_line(color='#29b5e8').encode(y=alt.Y('주간점수', scale=y_fix)) + 
-                              base.mark_point(color='#29b5e8', size=100).encode(y='주간점수') + 
-                              base.mark_text(dy=-15, fontSize=14, color='#29b5e8', fontWeight='bold').encode(y='주간점수', text='주간점수') + 
-                              base.mark_line(color='gray', strokeDash=[5,5]).encode(y='주간평균'))
-                        st.altair_chart(c1, use_container_width=True)
-
-                        if "성취도점수" in rep.columns and rep["성취도점수"].sum() > 0:
-                            st.subheader("2️⃣ 성취도 평가 결과")
-                            ach_d = rep[rep["성취도점수"] > 0]
-                            base_ach = alt.Chart(ach_d).encode(x=alt.X('시기', sort=None))
-                            
-                            c2 = (base_ach.mark_line(color='#ff6c6c').encode(y=alt.Y('성취도점수', scale=y_fix)) + 
-                                  base_ach.mark_point(color='#ff6c6c', size=100).encode(y='성취도점수') + 
-                                  base_ach.mark_text(dy=-15, fontSize=14, color='#ff6c6c', fontWeight='bold').encode(y='성취도점수', text='성취도점수') + 
-                                  base_ach.mark_line(color='gray', strokeDash=[5,5]).encode(y='성취도평균'))
-                            st.altair_chart(c2, use_container_width=True)
-
-                        st.subheader("3️⃣ 상세 학습 내역")
-                        # [유지] 총평 표에 통합
-                        cols = ["시기", "과제", "주간점수", "주간평균", "오답번호", "특이사항", "성취도점수", "성취도평균", "성취도오답", "총평"]
-                        disp = rep[[c for c in cols if c in rep.columns]].copy()
-                        
-                        rename_map = {"시기":"시기", "과제":"과제(%)", "주간점수":"주간과제점수", "주간평균":"반평균", 
-                                      "오답번호":"주간과제오답", "특이사항":"코멘트", "성취도점수":"성취도평가점수", "성취도평균":"성취도평균", 
-                                      "성취도오답":"성취도오답", "총평":"성취도총평"}
-                        disp.rename(columns=rename_map, inplace=True)
-                        st.table(disp.set_index("시기"))
-                    else:
-                        st.warning("기간을 선택해주세요.")
-                else:
-                    st.info("데이터가 없습니다.")
