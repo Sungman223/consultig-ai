@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import requests # 구글 라이브러리 대신 직접 통신 (버전 문제 해결사)
+import requests # REST API 통신용
 import json
 import datetime
 import altair as alt
@@ -61,27 +61,29 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         return False
 
 # ==========================================
-# [설정 3] Gemini 2.0 Flash API 호출 (REST API)
+# [설정 3] Gemini 2.0 Flash API 호출 (문체 수정판)
 # ==========================================
-def refine_text_ai(raw_text, context_type):
+def refine_text_ai(raw_text, context_type, student_name): # 학생 이름 추가
     if not raw_text:
         return raw_text
         
     try:
         api_key = st.secrets["GENAI_API_KEY"]
-        
-        # [핵심 수정] Gemini 2.0 Flash (Experimental) 모델 주소 적용!
-        # 현재 2.0 모델의 공식 API 이름은 'gemini-2.0-flash-exp' 입니다.
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
         
-        headers = {
-            'Content-Type': 'application/json'
-        }
+        headers = {'Content-Type': 'application/json'}
         
+        # [프롬프트 대폭 수정] : 편지 형식 금지, 이름 포함, 간결하게
         prompt_text = f"""
-        당신은 입시 수학 학원의 베테랑 선생님입니다. 
-        아래 내용을 학부모님께 보낼 {context_type} 목적으로, 정중하고 신뢰감 있으면서도 명확한 문체로 다듬어주세요.
-        핵심 내용은 유지하되 문장을 매끄럽게 교정하세요.
+        당신은 입시 수학 학원의 김성만 선생님입니다.
+        아래 메모는 '{student_name}' 학생에 대한 내용입니다.
+        이 내용을 학부모님께 전달하거나 기록으로 남길 수 있도록 '정중하고 전문적인 문체'로 다듬어주세요.
+
+        [지침사항]
+        1. **절대 편지 형식으로 쓰지 마세요.** (안녕하세요, 드림, 날짜 등 금지)
+        2. 학생 이름 '{student_name}'을 문장 주어로 자연스럽게 사용하세요.
+        3. 너무 장황하게 늘리지 말고, 핵심 내용을 간결하게 요약/정리하세요.
+        4. 오타나 비문이 있다면 자연스럽게 교정하세요.
         
         [원문]: {raw_text}
         """
@@ -92,7 +94,6 @@ def refine_text_ai(raw_text, context_type):
             }]
         }
         
-        # 우체부(requests)가 2.0 모델에게 편지 배달
         response = requests.post(url, headers=headers, data=json.dumps(data))
         
         if response.status_code == 200:
@@ -133,195 +134,3 @@ if menu == "신규 학생 등록":
         if st.form_submit_button("등록"):
             if name:
                 if add_row_to_sheet("students", [name, ban, origin, target, addr]):
-                    st.success(f"{name} 학생 등록 완료!")
-                    st.balloons()
-
-# ------------------------------------------
-# 2. 학생 관리
-# ------------------------------------------
-elif menu == "학생 관리 (상담/성적)":
-    df_students = load_data_from_sheet("students")
-    
-    if df_students.empty:
-        st.warning("학생 데이터가 없습니다.")
-    else:
-        student_list = df_students["이름"].tolist()
-        selected_student = st.sidebar.selectbox("학생 선택", student_list)
-        
-        rows = df_students[df_students["이름"] == selected_student]
-        if not rows.empty:
-            info = rows.iloc[0]
-            ban_txt = info['반'] if '반' in info else ''
-            st.sidebar.info(f"**{info['이름']} ({ban_txt})**\n\n🏫 {info['출신중']} ➡️ {info['배정고']}\n🏠 {info['거주지']}")
-
-        tab1, tab2, tab3 = st.tabs(["🗣️ 상담 일지 (AI)", "📊 주간 학습 & 성취도 입력", "👨‍👩‍👧‍👦 학부모 전송용 리포트"])
-
-        # --- [탭 1] 상담 일지 ---
-        with tab1:
-            st.subheader(f"{selected_student} 상담 기록")
-            df_c = load_data_from_sheet("counseling")
-            with st.expander("📂 이전 상담 내역"):
-                if not df_c.empty:
-                    logs = df_c[df_c["이름"] == selected_student]
-                    if '날짜' in logs.columns: logs = logs.sort_values(by='날짜', ascending=False)
-                    for _, r in logs.iterrows():
-                        st.markdown(f"**🗓️ {r['날짜']}**")
-                        st.info(r['내용'])
-
-            st.divider()
-            st.write("#### ✍️ 새로운 상담 입력")
-            c_date = st.date_input("날짜", datetime.date.today())
-            
-            # AI 입력 프로세스
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80, key="input_c")
-            with c2:
-                st.write("")
-                st.write("")
-                if st.button("✨ AI 다듬기 (Gemini 2.0)", key="btn_c"):
-                    if raw_c:
-                        with st.spinner("Gemini 2.0 Flash가 생각 중..."):
-                            st.session_state.counsel_result = refine_text_ai(raw_c, "학부모 상담 일지")
-            
-            final_c = st.text_area("2. 최종 저장될 내용 (수정 가능)", value=st.session_state.counsel_result, height=150)
-
-            if st.button("💾 상담 내용 저장", type="primary"):
-                content_to_save = final_c if final_c else raw_c
-                if content_to_save:
-                    if add_row_to_sheet("counseling", [selected_student, str(c_date), content_to_save]):
-                        st.success("저장되었습니다.")
-                        st.session_state.counsel_result = "" 
-                        st.rerun()
-                else:
-                    st.warning("내용이 없습니다.")
-
-        # --- [탭 2] 성적 입력 ---
-        with tab2:
-            st.subheader("📊 성적 데이터 입력")
-            c1, c2 = st.columns(2)
-            mon = c1.selectbox("월", [f"{i}월" for i in range(1, 13)])
-            wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
-            period = f"{mon} {wk}"
-
-            st.markdown("##### 📝 주간 과제")
-            cc1, cc2, cc3 = st.columns(3)
-            hw = cc1.number_input("수행도(%)", 0, 100, 80)
-            w_sc = cc2.number_input("점수", 0, 100, 0)
-            w_av = cc3.number_input("반 평균", 0, 100, 0)
-            wrong = st.text_input("주간 오답 (띄어쓰기 구분)", placeholder="예: 13 15 22")
-            
-            # 특이사항 AI
-            mc1, mc2 = st.columns([3, 1])
-            with mc1:
-                raw_m = st.text_area("특이사항 메모 (대충 적기)", height=60, key="input_m")
-            with mc2:
-                st.write("")
-                if st.button("✨ 특이사항 다듬기", key="btn_m"):
-                    if raw_m:
-                        with st.spinner("Gemini 2.0 작업 중..."):
-                            st.session_state.memo_result = refine_text_ai(raw_m, "학습 태도 특이사항")
-            
-            final_m = st.text_area("최종 특이사항", value=st.session_state.memo_result, height=80)
-
-            st.divider()
-
-            st.markdown("##### 🏆 성취도 평가")
-            with st.expander("입력창 열기", expanded=True):
-                cc4, cc5 = st.columns(2)
-                a_sc = cc4.number_input("성취도 점수", 0, 100, 0)
-                a_av = cc5.number_input("성취도 평균", 0, 100, 0)
-                a_wrong = st.text_input("성취도 오답 (띄어쓰기 구분)", placeholder="예: 21 29 30")
-                
-                # 총평 AI
-                rc1, rc2 = st.columns([3, 1])
-                with rc1:
-                    raw_r = st.text_area("총평 메모 (대충 적기)", height=60, key="input_r")
-                with rc2:
-                    st.write("")
-                    if st.button("✨ 총평 다듬기", key="btn_r"):
-                        if raw_r:
-                            with st.spinner("Gemini 2.0 작업 중..."):
-                                st.session_state.rev_result = refine_text_ai(raw_r, "성취도 평가 총평")
-                
-                final_r = st.text_area("최종 총평", value=st.session_state.rev_result, height=100)
-
-            st.write("")
-            if st.button("💾 전체 성적 및 평가 저장", type="primary"):
-                save_m = final_m if final_m else raw_m
-                save_r = final_r if final_r else raw_r
-                
-                row = [selected_student, period, hw, w_sc, w_av, wrong, save_m, a_sc, a_av, a_wrong, save_r]
-                if add_row_to_sheet("weekly", row):
-                    st.success("저장 완료!")
-                    st.session_state.memo_result = ""
-                    st.session_state.rev_result = ""
-                    st.rerun()
-
-        # --- [탭 3] 학부모 리포트 ---
-        with tab3:
-            st.header(f"📑 {selected_student} 학생 학습 리포트")
-            st.divider()
-
-            df_w = load_data_from_sheet("weekly")
-            if not df_w.empty:
-                my_w = df_w[df_w["이름"] == selected_student]
-                if not my_w.empty:
-                    periods = my_w["시기"].tolist()
-                    sel_p = st.multiselect("기간 선택:", periods, default=periods)
-                    
-                    if sel_p:
-                        rep = my_w[my_w["시기"].isin(sel_p)].copy()
-
-                        # 오답 포맷팅
-                        def format_wrong(x):
-                            s = str(x).strip()
-                            if not s or s == '0': return ""
-                            s = s.replace(',', ' ')
-                            parts = s.split()
-                            return ', '.join(parts)
-
-                        if '오답번호' in rep.columns: rep['오답번호'] = rep['오답번호'].apply(format_wrong)
-                        if '성취도오답' in rep.columns: rep['성취도오답'] = rep['성취도오답'].apply(format_wrong)
-
-                        # 1. 그래프 (주간)
-                        st.subheader("1️⃣ 주간 과제 성취도")
-                        base = alt.Chart(rep).encode(x=alt.X('시기', sort=None))
-                        y_fix = alt.Scale(domain=[0, 100])
-                        
-                        c1 = (base.mark_line(color='#29b5e8').encode(y=alt.Y('주간점수', scale=y_fix)) + 
-                              base.mark_point(color='#29b5e8', size=100).encode(y='주간점수') + 
-                              base.mark_text(dy=-15, fontSize=14, color='#29b5e8', fontWeight='bold').encode(y='주간점수', text='주간점수') + 
-                              base.mark_line(color='gray', strokeDash=[5,5]).encode(y='주간평균'))
-                        st.altair_chart(c1, use_container_width=True)
-
-                        # 2. 그래프 (성취도)
-                        if "성취도점수" in rep.columns and rep["성취도점수"].sum() > 0:
-                            st.subheader("2️⃣ 성취도 평가 결과")
-                            ach_d = rep[rep["성취도점수"] > 0]
-                            base_ach = alt.Chart(ach_d).encode(x=alt.X('시기', sort=None))
-                            
-                            c2 = (base_ach.mark_line(color='#ff6c6c').encode(y=alt.Y('성취도점수', scale=y_fix)) + 
-                                  base_ach.mark_point(color='#ff6c6c', size=100).encode(y='성취도점수') + 
-                                  base_ach.mark_text(dy=-15, fontSize=14, color='#ff6c6c', fontWeight='bold').encode(y='성취도점수', text='성취도점수') + 
-                                  base_ach.mark_line(color='gray', strokeDash=[5,5]).encode(y='성취도평균'))
-                            st.altair_chart(c2, use_container_width=True)
-
-                        # 3. 상세 표
-                        st.subheader("3️⃣ 상세 학습 내역")
-                        cols = ["시기", "과제", "주간점수", "주간평균", "오답번호", "특이사항", "성취도점수", "성취도평균", "성취도오답"]
-                        disp = rep[[c for c in cols if c in rep.columns]].copy()
-                        
-                        rename_map = {"시기":"시기", "과제":"과제(%)", "주간점수":"점수", "주간평균":"반평균", 
-                                      "오답번호":"주간오답", "특이사항":"코멘트", "성취도점수":"성취도", "성취도평균":"성취도평균", "성취도오답":"성취도오답"}
-                        disp.rename(columns=rename_map, inplace=True)
-                        st.table(disp.set_index("시기"))
-
-                        # 4. 총평
-                        for i, r in rep.iterrows():
-                            if r.get('총평'):
-                                st.info(f"**[{r['시기']} 성취도 총평]**\n\n{r['총평']}")
-                    else:
-                        st.warning("기간을 선택해주세요.")
-                else:
-                    st.info("데이터가 없습니다.")
