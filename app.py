@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import google.generativeai as genai
+import requests # 구글 라이브러리 대신 직접 통신 (버전 문제 해결사)
+import json
 import datetime
 import altair as alt
 import re
@@ -60,34 +61,48 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         return False
 
 # ==========================================
-# [설정 3] Gemini AI 설정 (가장 안전한 모델)
+# [설정 3] Gemini 2.0 Flash API 호출 (REST API)
 # ==========================================
-try:
-    genai.configure(api_key=st.secrets["GENAI_API_KEY"])
-    
-    # [수정] 404 에러 해결을 위해 가장 안정적인 'gemini-1.5-flash' 사용
-    # 만약 이것도 안 되면 'gemini-1.5-flash-001' 로 바꿔보세요.
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-    
-except Exception as e:
-    gemini_model = None
-
-# AI 도우미 함수
 def refine_text_ai(raw_text, context_type):
-    if not gemini_model or not raw_text:
+    if not raw_text:
         return raw_text
+        
     try:
-        prompt = f"""
+        api_key = st.secrets["GENAI_API_KEY"]
+        
+        # [핵심 수정] Gemini 2.0 Flash (Experimental) 모델 주소 적용!
+        # 현재 2.0 모델의 공식 API 이름은 'gemini-2.0-flash-exp' 입니다.
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
+        
+        headers = {
+            'Content-Type': 'application/json'
+        }
+        
+        prompt_text = f"""
         당신은 입시 수학 학원의 베테랑 선생님입니다. 
         아래 내용을 학부모님께 보낼 {context_type} 목적으로, 정중하고 신뢰감 있으면서도 명확한 문체로 다듬어주세요.
         핵심 내용은 유지하되 문장을 매끄럽게 교정하세요.
         
         [원문]: {raw_text}
         """
-        response = gemini_model.generate_content(prompt)
-        return response.text.strip()
+        
+        data = {
+            "contents": [{
+                "parts": [{"text": prompt_text}]
+            }]
+        }
+        
+        # 우체부(requests)가 2.0 모델에게 편지 배달
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"AI 연결 오류 ({response.status_code}): {response.text}"
+            
     except Exception as e:
-        return f"AI 오류 발생: {e}"
+        return f"통신 오류 발생: {e}"
 
 # ==========================================
 # 메인 앱 화면
@@ -157,15 +172,16 @@ elif menu == "학생 관리 (상담/성적)":
             st.write("#### ✍️ 새로운 상담 입력")
             c_date = st.date_input("날짜", datetime.date.today())
             
+            # AI 입력 프로세스
             c1, c2 = st.columns([3, 1])
             with c1:
                 raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80, key="input_c")
             with c2:
                 st.write("")
                 st.write("")
-                if st.button("✨ AI 다듬기", key="btn_c"):
+                if st.button("✨ AI 다듬기 (Gemini 2.0)", key="btn_c"):
                     if raw_c:
-                        with st.spinner("다듬는 중..."):
+                        with st.spinner("Gemini 2.0 Flash가 생각 중..."):
                             st.session_state.counsel_result = refine_text_ai(raw_c, "학부모 상담 일지")
             
             final_c = st.text_area("2. 최종 저장될 내용 (수정 가능)", value=st.session_state.counsel_result, height=150)
@@ -203,7 +219,7 @@ elif menu == "학생 관리 (상담/성적)":
                 st.write("")
                 if st.button("✨ 특이사항 다듬기", key="btn_m"):
                     if raw_m:
-                        with st.spinner("다듬는 중..."):
+                        with st.spinner("Gemini 2.0 작업 중..."):
                             st.session_state.memo_result = refine_text_ai(raw_m, "학습 태도 특이사항")
             
             final_m = st.text_area("최종 특이사항", value=st.session_state.memo_result, height=80)
@@ -225,7 +241,7 @@ elif menu == "학생 관리 (상담/성적)":
                     st.write("")
                     if st.button("✨ 총평 다듬기", key="btn_r"):
                         if raw_r:
-                            with st.spinner("다듬는 중..."):
+                            with st.spinner("Gemini 2.0 작업 중..."):
                                 st.session_state.rev_result = refine_text_ai(raw_r, "성취도 평가 총평")
                 
                 final_r = st.text_area("최종 총평", value=st.session_state.rev_result, height=100)
