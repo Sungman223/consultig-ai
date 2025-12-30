@@ -69,13 +69,28 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         st.error(f"저장 실패: {e}")
         return False
 
-# 오답 번호 자동 정렬 함수
+# ------------------------------------------
+# [유틸리티] 데이터 정리 함수들
+# ------------------------------------------
 def sort_numbers_string(text):
+    """오답 번호 자동 정렬 (예: '3 1 2' -> '1, 2, 3')"""
     if not text: return ""
     numbers = re.findall(r'\d+', str(text))
     if not numbers: return text
     sorted_nums = sorted([int(n) for n in numbers])
     return ", ".join(map(str, sorted_nums))
+
+def clean_school_name(text):
+    """학교 이름 자동 줄임 (예: 풍생고등학교 -> 풍생고)"""
+    if not text: return ""
+    text = text.replace("등학교", "고")
+    text = text.replace("중학교", "중")
+    return text.strip()
+
+def clean_class_name(text):
+    """반 이름 대문자 변환 (예: m1 -> M1)"""
+    if not text: return ""
+    return text.upper().strip()
 
 # ==========================================
 # [설정 3] Gemini 2.0 Flash API (REST API)
@@ -119,22 +134,29 @@ def refine_text_ai(raw_text, context_type, student_name):
 menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학생 등록"])
 
 # ------------------------------------------
-# 1. 신규 학생 등록
+# 1. 신규 학생 등록 (자동 변환 적용)
 # ------------------------------------------
 if menu == "신규 학생 등록":
     st.header("📝 신규 학생 등록")
+    st.info("💡 학교 이름은 '등학교/중학교'를 입력해도 자동으로 '고/중'으로 줄여서 저장됩니다. 반 이름은 대문자로 자동 변환됩니다.")
+    
     with st.form("new_student_form"):
         col1, col2 = st.columns(2)
         name = col1.text_input("학생 이름")
-        ban = col2.text_input("반 (Class)")
-        origin = st.text_input("출신 중학교")
-        target = st.text_input("배정 예정 고등학교")
+        ban = col2.text_input("반 (예: M1)")
+        origin = st.text_input("출신 중학교 (예: 부산중)")
+        target = st.text_input("배정 예정 고등학교 (예: 분당고)")
         addr = st.text_input("거주지 (대략적)")
         
         if st.form_submit_button("💾 학생 등록"):
             if name:
-                if add_row_to_sheet("students", [name, ban, origin, target, addr]):
-                    st.success(f"{name} 학생 등록 완료!")
+                # [핵심] 입력값 자동 표준화
+                clean_ban = clean_class_name(ban)
+                clean_origin = clean_school_name(origin)
+                clean_target = clean_school_name(target)
+                
+                if add_row_to_sheet("students", [name, clean_ban, clean_origin, clean_target, addr]):
+                    st.success(f"{name} 학생 등록 완료! ({clean_ban}, {clean_origin} -> {clean_target})")
 
 # ------------------------------------------
 # 2. 학생 관리
@@ -145,8 +167,13 @@ elif menu == "학생 관리 (상담/성적)":
     if df_students.empty:
         st.warning("학생 데이터가 없습니다. (구글 시트 연결 확인 필요)")
     else:
-        student_list = df_students["이름"].tolist()
-        selected_student = st.sidebar.selectbox("학생 선택", student_list)
+        # [핵심] 사이드바에 이름과 반을 함께 표시
+        # 표시용 리스트 생성 (예: "홍길동 (M1)")
+        student_display_list = [f"{row['이름']} ({row['반']})" for idx, row in df_students.iterrows()]
+        selected_display = st.sidebar.selectbox("학생 선택", student_display_list)
+        
+        # 선택된 값에서 이름만 추출 (괄호 앞부분)
+        selected_student = selected_display.split(" (")[0]
         
         rows = df_students[df_students["이름"] == selected_student]
         if not rows.empty:
@@ -314,7 +341,7 @@ elif menu == "학생 관리 (상담/성적)":
                             st.altair_chart(c2, use_container_width=True)
 
                         st.subheader("3️⃣ 상세 학습 내역")
-                        # [수정] '총평' 컬럼 추가 및 맵핑 업데이트
+                        # [유지] 총평 표에 통합
                         cols = ["시기", "과제", "주간점수", "주간평균", "오답번호", "특이사항", "성취도점수", "성취도평균", "성취도오답", "총평"]
                         disp = rep[[c for c in cols if c in rep.columns]].copy()
                         
@@ -323,7 +350,6 @@ elif menu == "학생 관리 (상담/성적)":
                                       "성취도오답":"성취도오답", "총평":"성취도총평"}
                         disp.rename(columns=rename_map, inplace=True)
                         st.table(disp.set_index("시기"))
-                        # [삭제] 기존에 아래에 따로 나오던 총평 반복문 삭제함
                     else:
                         st.warning("기간을 선택해주세요.")
                 else:
