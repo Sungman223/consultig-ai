@@ -299,4 +299,32 @@ elif menu == "학생 관리 (상담/성적)":
                         c1 = (base.mark_line(color='#29b5e8').encode(y=alt.Y('주간점수', scale=y_fix)) + 
                               base.mark_point(color='#29b5e8', size=100).encode(y='주간점수') + 
                               base.mark_text(dy=-15, fontSize=14, color='#29b5e8', fontWeight='bold').encode(y='주간점수', text='주간점수') + 
-                              base.mark_line(color='
+                              base.mark_line(color='gray', strokeDash=[5,5]).encode(y='주간평균'))
+                        st.altair_chart(c1, use_container_width=True)
+
+                        if "성취도점수" in rep.columns and rep["성취도점수"].sum() > 0:
+                            st.subheader("2️⃣ 성취도 평가 결과")
+                            ach_d = rep[rep["성취도점수"] > 0]
+                            base_ach = alt.Chart(ach_d).encode(x=alt.X('시기', sort=None))
+                            
+                            c2 = (base_ach.mark_line(color='#ff6c6c').encode(y=alt.Y('성취도점수', scale=y_fix)) + 
+                                  base_ach.mark_point(color='#ff6c6c', size=100).encode(y='성취도점수') + 
+                                  base_ach.mark_text(dy=-15, fontSize=14, color='#ff6c6c', fontWeight='bold').encode(y='성취도점수', text='성취도점수') + 
+                                  base_ach.mark_line(color='gray', strokeDash=[5,5]).encode(y='성취도평균'))
+                            st.altair_chart(c2, use_container_width=True)
+
+                        st.subheader("3️⃣ 상세 학습 내역")
+                        # [수정] '총평' 컬럼 추가 및 맵핑 업데이트
+                        cols = ["시기", "과제", "주간점수", "주간평균", "오답번호", "특이사항", "성취도점수", "성취도평균", "성취도오답", "총평"]
+                        disp = rep[[c for c in cols if c in rep.columns]].copy()
+                        
+                        rename_map = {"시기":"시기", "과제":"과제(%)", "주간점수":"주간과제점수", "주간평균":"반평균", 
+                                      "오답번호":"주간과제오답", "특이사항":"코멘트", "성취도점수":"성취도평가점수", "성취도평균":"성취도평균", 
+                                      "성취도오답":"성취도오답", "총평":"성취도총평"}
+                        disp.rename(columns=rename_map, inplace=True)
+                        st.table(disp.set_index("시기"))
+                        # [삭제] 기존에 아래에 따로 나오던 총평 반복문 삭제함
+                    else:
+                        st.warning("기간을 선택해주세요.")
+                else:
+                    st.info("데이터가 없습니다.")
