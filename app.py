@@ -36,7 +36,10 @@ def get_google_sheet_connection():
 def load_data_from_sheet(worksheet_name):
     try:
         client = get_google_sheet_connection()
-        if not client: return pd.DataFrame()
+        if not client: 
+            st.error("❌ 구글 시트 서버와 연결할 수 없습니다. (인증 실패)")
+            return pd.DataFrame()
+            
         sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
         data = sheet.get_all_values()
         
@@ -53,6 +56,8 @@ def load_data_from_sheet(worksheet_name):
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
     except Exception as e:
+        # [수정] 여기가 핵심입니다! 에러를 숨기지 않고 보여줍니다.
+        st.error(f"🚨 데이터 로드 오류 발생: {e}")
         return pd.DataFrame()
 
 def add_row_to_sheet(worksheet_name, row_data_list):
@@ -82,7 +87,6 @@ def refine_text_ai(raw_text, context_type, student_name):
             'Content-Type': 'application/json'
         }
         
-        # [수정] 제목/헤더 생성 금지 지침 포함
         prompt_text = f"""
         당신은 입시 수학 학원의 베테랑 선생님입니다. 
         아래 메모는 '{student_name}' 학생에 대한 내용입니다.
@@ -152,7 +156,9 @@ elif menu == "학생 관리 (상담/성적)":
     df_students = load_data_from_sheet("students")
     
     if df_students.empty:
-        st.warning("학생 데이터가 없습니다.")
+        # [수정] 여기가 중요합니다! 에러 메시지가 화면에 떠야 원인을 알 수 있습니다.
+        # 만약 위의 st.error가 떴다면 그 내용을 알려주세요.
+        st.warning("학생 데이터가 없습니다. (구글 시트 'students' 탭을 확인하거나 연결 상태를 점검하세요)")
     else:
         student_list = df_students["이름"].tolist()
         selected_student = st.sidebar.selectbox("학생 선택", student_list)
@@ -259,7 +265,6 @@ elif menu == "학생 관리 (상담/성적)":
                 save_m = final_m if final_m else raw_m
                 save_r = final_r if final_r else raw_r
                 
-                # [수정] 여기가 끊겼던 부분입니다. 확실하게 이어 붙였습니다.
                 row = [selected_student, period, hw, w_sc, w_av, wrong, save_m, a_sc, a_av, a_wrong, save_r]
                 
                 if add_row_to_sheet("weekly", row):
