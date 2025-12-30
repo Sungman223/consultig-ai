@@ -64,7 +64,6 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         if not client: return False
         sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
         sheet.append_row(row_data_list)
-        # 저장 후 캐시 비우기 (즉시 반영)
         load_data_from_sheet.clear()
         return True
     except Exception as e:
@@ -76,7 +75,7 @@ def add_row_to_sheet(worksheet_name, row_data_list):
 # ==========================================
 def refine_text_ai(raw_text, context_type, student_name):
     if not raw_text:
-        return raw_text
+        return ""
         
     try:
         api_key = st.secrets["GENAI_API_KEY"]
@@ -110,10 +109,10 @@ def refine_text_ai(raw_text, context_type, student_name):
 # 메인 앱 화면
 # ==========================================
 
-# [세션 초기화]
-if "counsel_result" not in st.session_state: st.session_state.counsel_result = ""
-if "memo_result" not in st.session_state: st.session_state.memo_result = ""
-if "rev_result" not in st.session_state: st.session_state.rev_result = ""
+# [세션 상태 초기화] - 값을 유지하기 위해 필수
+if "edit_memo" not in st.session_state: st.session_state.edit_memo = ""
+if "edit_rev" not in st.session_state: st.session_state.edit_rev = ""
+if "counsel_res" not in st.session_state: st.session_state.counsel_res = ""
 
 menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학생 등록"])
 
@@ -153,7 +152,6 @@ elif menu == "학생 관리 (상담/성적)":
             ban_txt = info['반'] if '반' in info else ''
             st.sidebar.info(f"**{info['이름']} ({ban_txt})**\n\n🏫 {info['출신중']} ➡️ {info['배정고']}\n🏠 {info['거주지']}")
 
-        # [수정] 탭 이름 깔끔하게
         tab1, tab2, tab3 = st.tabs(["🗣️ 상담 일지", "📊 성적 입력", "👨‍👩‍👧‍👦 리포트"])
 
         # --- [탭 1] 상담 일지 ---
@@ -170,103 +168,95 @@ elif menu == "학생 관리 (상담/성적)":
 
             st.divider()
             
-            with st.form("counsel_form"):
-                st.write("#### ✍️ 새로운 상담 입력")
-                c_date = st.date_input("날짜", datetime.date.today())
-                raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80)
-                
-                col_btn1, col_btn2 = st.columns(2)
-                preview_click = col_btn1.form_submit_button("👀 AI 변환 미리보기")
-                save_click = col_btn2.form_submit_button("💾 최종 저장", type="primary")
+            # 상담 입력 (폼 제거 -> 즉시 반응형으로 변경)
+            st.write("#### ✍️ 새로운 상담 입력")
+            c_date = st.date_input("날짜", datetime.date.today())
+            raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80, key="c_raw")
+            
+            if st.button("✨ AI 변환 (상담)", key="btn_c_ai"):
+                with st.spinner("변환 중..."):
+                    st.session_state.counsel_res = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
+                    st.rerun()
 
-                if preview_click and raw_c:
-                    st.session_state.counsel_result = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
-                    # [수정] 여기서 st.rerun()을 뺐습니다! (탭 튕김 방지)
+            # [핵심] 변환된 내용을 바로 수정할 수 있는 입력창
+            final_c = st.text_area("2. 최종 내용 (여기서 직접 수정하세요)", value=st.session_state.counsel_res, height=150, key="c_final")
 
-                if save_click:
-                    content = st.session_state.counsel_result if st.session_state.counsel_result else raw_c
-                    if content:
-                        if add_row_to_sheet("counseling", [selected_student, str(c_date), content]):
-                            st.success("상담 내용이 저장되었습니다!")
-                            st.session_state.counsel_result = "" 
-                            st.rerun() # 저장 후엔 갱신 필요
-                    else:
-                        st.error("내용을 입력해주세요.")
-
-            if st.session_state.counsel_result:
-                st.info(f"**[AI 변환 결과]**\n{st.session_state.counsel_result}")
+            if st.button("💾 상담 내용 저장", type="primary", key="btn_c_save"):
+                if final_c:
+                    if add_row_to_sheet("counseling", [selected_student, str(c_date), final_c]):
+                        st.success("저장 완료!")
+                        st.session_state.counsel_res = "" # 초기화
+                        st.rerun()
+                else:
+                    st.warning("내용이 없습니다.")
 
 
         # --- [탭 2] 성적 입력 ---
         with tab2:
             st.subheader("📊 성적 데이터 입력")
             
-            with st.form("grade_form"):
-                c1, c2 = st.columns(2)
-                mon = c1.selectbox("월", [f"{i}월" for i in range(1, 13)])
-                wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
-                period = f"{mon} {wk}"
+            # 1. 날짜 및 점수 입력 (폼 없이 자유롭게 입력, 자동저장 안됨)
+            c1, c2 = st.columns(2)
+            mon = c1.selectbox("월", [f"{i}월" for i in range(1, 13)])
+            wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
+            period = f"{mon} {wk}"
 
-                st.markdown("##### 📝 주간 과제 & 점수")
-                cc1, cc2, cc3 = st.columns(3)
+            st.markdown("##### 📝 주간 과제 & 점수")
+            cc1, cc2, cc3 = st.columns(3)
+            hw = cc1.number_input("수행도(%)", 0, 100, 80)
+            w_sc = cc2.number_input("주간 과제 점수", 0, 100, 0)
+            w_av = cc3.number_input("주간과제 평균점수", 0, 100, 0)
+            wrong = st.text_input("주간 과제 오답 번호 (띄어쓰기 구분)", placeholder="예: 13 15 22")
+            
+            st.divider()
+
+            # 2. 특이사항 입력 & 변환
+            st.markdown("##### 📢 학습 태도 및 특이사항")
+            raw_m = st.text_area("특이사항 메모 (대충 적기)", height=70, key="m_raw")
+            
+            # 변환 버튼
+            if st.button("✨ 특이사항 AI 변환", key="btn_m_ai"):
+                with st.spinner("변환 중..."):
+                    st.session_state.edit_memo = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
+                    st.rerun()
+            
+            # [핵심] 결과가 바로 밑에 나오고 수정 가능
+            final_m = st.text_area("최종 특이사항 (수정 가능)", value=st.session_state.edit_memo, height=80, key="m_final")
+
+            st.divider()
+
+            # 3. 성취도 평가 입력 & 변환
+            st.markdown("##### 🏆 성취도 평가")
+            cc4, cc5 = st.columns(2)
+            a_sc = cc4.number_input("성취도 평가 점수", 0, 100, 0)
+            a_av = cc5.number_input("성취도 평가 점수 평균", 0, 100, 0)
+            a_wrong = st.text_input("성취도평가 오답번호", placeholder="예: 21 29 30")
+            
+            st.markdown("##### 📝 성취도 총평")
+            raw_r = st.text_area("총평 메모 (대충 적기)", height=70, key="r_raw")
+            
+            # 변환 버튼
+            if st.button("✨ 총평 AI 변환", key="btn_r_ai"):
+                with st.spinner("변환 중..."):
+                    st.session_state.edit_rev = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
+                    st.rerun()
+            
+            # [핵심] 결과가 바로 밑에 나오고 수정 가능
+            final_r = st.text_area("최종 총평 (수정 가능)", value=st.session_state.edit_rev, height=80, key="r_final")
+
+            st.divider()
+            
+            # 4. 전체 저장 버튼
+            if st.button("💾 전체 성적 및 평가 저장", type="primary", use_container_width=True):
+                # 사용자가 최종 수정한 내용(final_m, final_r)을 가져옴
+                row = [selected_student, period, hw, w_sc, w_av, wrong, final_m, a_sc, a_av, a_wrong, final_r]
                 
-                # 라벨 수정 완료
-                hw = cc1.number_input("수행도(%)", 0, 100, 80)
-                w_sc = cc2.number_input("주간 과제 점수", 0, 100, 0)
-                w_av = cc3.number_input("주간과제 평균점수", 0, 100, 0)
-                wrong = st.text_input("주간 과제 오답 번호 (띄어쓰기 구분)", placeholder="예: 13 15 22")
-                
-                st.markdown("---")
-                st.markdown("##### 📢 학습 태도 및 특이사항")
-                raw_m = st.text_area("특이사항 메모 (대충 적기)", height=70)
-                btn_transform_m = st.form_submit_button("✨ 특이사항 AI 변환")
-
-                st.divider()
-                st.markdown("##### 🏆 성취도 평가")
-                cc4, cc5 = st.columns(2)
-                # [수정] 선생님 요청 라벨 적용
-                a_sc = cc4.number_input("성취도 평가 점수", 0, 100, 0)
-                a_av = cc5.number_input("성취도 평가 점수 평균", 0, 100, 0)
-                
-                # [수정] 라벨 적용
-                a_wrong = st.text_input("성취도평가 오답번호", placeholder="예: 21 29 30")
-                
-                st.markdown("##### 📝 성취도 총평")
-                raw_r = st.text_area("총평 메모 (대충 적기)", height=70)
-                btn_transform_r = st.form_submit_button("✨ 총평 AI 변환")
-
-                st.write("")
-                grade_save = st.form_submit_button("💾 전체 저장하기", type="primary")
-
-                # --- 동작 로직 (rerun 제거로 탭 튕김 해결) ---
-                if btn_transform_m and raw_m:
-                    st.session_state.memo_result = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
-                    # [수정] st.rerun() 삭제 -> 탭 유지됨
-                
-                if btn_transform_r and raw_r:
-                    st.session_state.rev_result = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
-                    # [수정] st.rerun() 삭제 -> 탭 유지됨
-
-                if grade_save:
-                    final_m = st.session_state.memo_result if st.session_state.memo_result else raw_m
-                    final_r = st.session_state.rev_result if st.session_state.rev_result else raw_r
-                    
-                    row = [selected_student, period, hw, w_sc, w_av, wrong, final_m, a_sc, a_av, a_wrong, final_r]
-                    
-                    if add_row_to_sheet("weekly", row):
-                        st.success("✅ 성적 및 평가가 성공적으로 저장되었습니다!")
-                        st.session_state.memo_result = ""
-                        st.session_state.rev_result = ""
-                        st.rerun() # 저장 완료 시에만 새로고침 (입력창 초기화를 위해)
-
-            # --- AI 변환 결과 보여주는 곳 ---
-            if st.session_state.memo_result or st.session_state.rev_result:
-                st.divider()
-                st.write("📢 **AI 변환 결과 미리보기 (저장 버튼을 눌러야 반영됩니다!)**")
-                if st.session_state.memo_result:
-                    st.info(f"**[특이사항]**\n{st.session_state.memo_result}")
-                if st.session_state.rev_result:
-                    st.info(f"**[총평]**\n{st.session_state.rev_result}")
+                if add_row_to_sheet("weekly", row):
+                    st.success("✅ 저장 완료되었습니다!")
+                    # 저장 후 입력창 초기화를 위해 세션 비우기
+                    st.session_state.edit_memo = ""
+                    st.session_state.edit_rev = ""
+                    st.rerun()
 
 
         # --- [탭 3] 학부모 리포트 ---
