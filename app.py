@@ -1,3 +1,32 @@
+선생님! 맞습니다. 👨‍🏫
+A학생 성적을 입력하고 저장했는데, 화면에 그 숫자들이 그대로 남아있으면 B학생 입력할 때 **"어? 이거 B학생 점수인가? 방금 입력했나?"** 하고 헷갈리기 십상이죠.
+
+저장을 누르면 **점수와 메모 칸이 싹~ 비워지도록(초기화)** 기능을 추가했습니다. (v31)
+이제 저장 버튼을 누르시고 마음 편하게 다음 학생을 선택하시면 됩니다!
+
+### 🛠️ v31 업데이트 (저장 후 자동 비우기)
+
+1. **성적 입력창 자동 청소:**
+* [전체 성적 및 평가 저장] 버튼을 누르고 저장이 성공하면, **모든 점수는 0점, 텍스트는 빈칸으로 초기화**됩니다.
+* (단, '월'과 '주차'는 선생님 편의를 위해 유지했습니다. 보통 같은 주차에 여러 학생을 입력하시니까요!)
+
+
+2. **상담 일지 자동 청소:**
+* 상담 내용도 저장 후에는 깔끔하게 비워집니다.
+
+
+3. **기존 기능 풀옵션 포함:**
+* 학교명 자동완성(풍생->풍생고), 반 대문자, 탭 고정, 오답 정렬 등 모든 기능이 포함되어 있습니다.
+
+
+
+---
+
+### 👨‍💻 최종_완성_자동비우기_v31.py
+
+`app.py` 내용을 전부 지우고, 아래 코드로 **덮어씌워 주세요.**
+
+```python
 import streamlit as st
 import pandas as pd
 import gspread
@@ -70,7 +99,7 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         return False
 
 # ------------------------------------------
-# [유틸리티] 데이터 정리 함수들 (강력해짐!)
+# [유틸리티] 데이터 정리 함수들
 # ------------------------------------------
 def sort_numbers_string(text):
     """오답 번호 자동 정렬"""
@@ -81,19 +110,10 @@ def sort_numbers_string(text):
     return ", ".join(map(str, sorted_nums))
 
 def clean_school_name(text, target_type="middle"):
-    """
-    학교 이름 강력 자동 완성
-    입력: 풍생, 풍생중, 풍생중학, 풍생중학교 -> (중학교 모드) 풍생중
-    입력: 풍생, 풍생고, 풍생고등, 풍생고등학교 -> (고등학교 모드) 풍생고
-    """
+    """학교 이름 강력 자동 완성"""
     if not text: return ""
     text = text.strip()
-    
-    # 1. 기존에 붙어있는 학교 관련 접미사 모두 제거 (뿌리 단어 추출)
-    # 예: 풍생중학 -> 풍생, 풍생고등학교 -> 풍생
     root_name = re.sub(r'(고등학교|중학교|고등|중학|고|중)$', '', text)
-    
-    # 2. 목표 타입에 맞는 접미사 부착
     if target_type == "middle":
         return root_name + "중"
     else:
@@ -146,31 +166,28 @@ def refine_text_ai(raw_text, context_type, student_name):
 menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학생 등록"])
 
 # ------------------------------------------
-# 1. 신규 학생 등록 (자동 초기화 & 강력 변환)
+# 1. 신규 학생 등록
 # ------------------------------------------
 if menu == "신규 학생 등록":
     st.header("📝 신규 학생 등록")
-    st.info("💡 팁: '풍생'만 입력해도 칸에 맞춰 자동으로 '풍생중', '풍생고'로 변환됩니다. **저장 후 입력창은 자동으로 비워집니다.**")
+    st.info("💡 팁: '풍생'만 입력해도 '풍생중', '풍생고'로 변환됩니다. **저장 후 자동으로 비워집니다.**")
     
-    # [핵심] clear_on_submit=True 설정으로 저장 후 입력창 자동 초기화
     with st.form("new_student_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         name = col1.text_input("학생 이름")
         ban = col2.text_input("반 (예: m1)")
-        origin = st.text_input("출신 중학교 (예: 풍생, 풍생중학)")
-        target = st.text_input("배정 예정 고등학교 (예: 풍생, 풍생고)")
+        origin = st.text_input("출신 중학교 (예: 풍생)")
+        target = st.text_input("배정 예정 고등학교 (예: 풍생)")
         addr = st.text_input("거주지 (대략적)")
         
         if st.form_submit_button("💾 학생 등록"):
             if name:
-                # [핵심] 강력해진 학교명 변환 함수 사용
                 clean_ban = clean_class_name(ban)
-                clean_origin = clean_school_name(origin, "middle") # 중학교 모드
-                clean_target = clean_school_name(target, "high")   # 고등학교 모드
+                clean_origin = clean_school_name(origin, "middle")
+                clean_target = clean_school_name(target, "high")
                 
                 if add_row_to_sheet("students", [name, clean_ban, clean_origin, clean_target, addr]):
                     st.success(f"✅ {name} 학생 등록 완료! ({clean_ban}, {clean_origin} -> {clean_target})")
-                    # 입력창은 clear_on_submit 덕분에 다음 턴에 자동으로 비워짐
 
 # ------------------------------------------
 # 2. 학생 관리
@@ -214,15 +231,17 @@ elif menu == "학생 관리 (상담/성적)":
 
             st.write("#### ✍️ 새로운 상담 입력")
             c_date = st.date_input("날짜", datetime.date.today())
-            raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80, key="raw_c_input")
+            # [Key 지정] 초기화를 위해 key 부여
+            raw_c = st.text_area("1. 상담 메모", height=80, key="c_raw_input")
             
-            if st.button("✨ AI 변환 (선택 사항)", key="btn_c_ai"):
-                with st.spinner("AI가 문장을 다듬는 중..."):
+            if st.button("✨ AI 변환 (선택)", key="btn_c_ai"):
+                with st.spinner("변환 중..."):
                     ai_result = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
-                    st.session_state['final_c_input'] = ai_result 
+                    st.session_state['c_final_input'] = ai_result 
                     st.rerun()
 
-            final_c = st.text_area("2. 최종 내용 (변환된 내용을 수정하거나, 직접 입력하세요)", height=150, key="final_c_input")
+            # [Key 지정]
+            final_c = st.text_area("2. 최종 내용", height=150, key="c_final_input")
 
             if st.button("💾 상담 내용 저장", type="primary", key="btn_c_save"):
                 content_to_save = final_c if final_c.strip() else raw_c
@@ -230,7 +249,9 @@ elif menu == "학생 관리 (상담/성적)":
                 if content_to_save:
                     if add_row_to_sheet("counseling", [selected_student, str(c_date), content_to_save]):
                         st.success("저장 완료!")
-                        if 'final_c_input' in st.session_state: del st.session_state['final_c_input']
+                        # [초기화] 저장 후 입력창 비우기
+                        st.session_state['c_raw_input'] = ""
+                        st.session_state['c_final_input'] = ""
                         st.rerun()
                 else:
                     st.warning("내용이 없습니다.")
@@ -247,44 +268,45 @@ elif menu == "학생 관리 (상담/성적)":
 
             st.markdown("##### 📝 주간 과제 & 점수")
             cc1, cc2, cc3 = st.columns(3)
-            hw = cc1.number_input("수행도(%)", 0, 100, 80)
-            w_sc = cc2.number_input("주간 과제 점수", 0, 100, 0)
-            w_av = cc3.number_input("주간과제 평균점수", 0, 100, 0)
-            wrong = st.text_input("주간 과제 오답 번호 (막 적어도 자동 정렬됨)", placeholder="예: 3 1 2")
+            # [Key 지정] 모든 입력창에 key 부여 (초기화용)
+            hw = cc1.number_input("수행도(%)", 0, 100, 80, key="g_hw")
+            w_sc = cc2.number_input("주간 과제 점수", 0, 100, 0, key="g_w_sc")
+            w_av = cc3.number_input("주간과제 평균점수", 0, 100, 0, key="g_w_av")
+            wrong = st.text_input("주간 과제 오답 번호", placeholder="예: 3 1 2", key="g_wrong")
             
             st.divider()
 
             # [특이사항 섹션]
             st.markdown("##### 📢 학습 태도 및 특이사항")
-            raw_m = st.text_area("특이사항 메모 (대충 적기)", height=70, key="raw_m_input")
+            raw_m = st.text_area("특이사항 메모", height=70, key="g_raw_m")
             
             if st.button("✨ 특이사항 AI 변환", key="btn_m_ai"):
-                with st.spinner("AI 변환 중..."):
+                with st.spinner("변환 중..."):
                     ai_result = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
-                    st.session_state['final_m_input'] = ai_result
+                    st.session_state['g_final_m'] = ai_result
                     st.rerun()
 
-            final_m = st.text_area("최종 특이사항 (수정 가능)", height=80, key="final_m_input")
+            final_m = st.text_area("최종 특이사항", height=80, key="g_final_m")
 
             st.divider()
 
             # [성취도 평가 섹션]
             st.markdown("##### 🏆 성취도 평가")
             cc4, cc5 = st.columns(2)
-            a_sc = cc4.number_input("성취도 평가 점수", 0, 100, 0)
-            a_av = cc5.number_input("성취도 평가 점수 평균", 0, 100, 0)
-            a_wrong = st.text_input("성취도평가 오답번호 (막 적어도 자동 정렬됨)", placeholder="예: 21 29 30")
+            a_sc = cc4.number_input("성취도 평가 점수", 0, 100, 0, key="g_a_sc")
+            a_av = cc5.number_input("성취도 평가 점수 평균", 0, 100, 0, key="g_a_av")
+            a_wrong = st.text_input("성취도평가 오답번호", placeholder="예: 21 29 30", key="g_a_wrong")
             
             st.markdown("##### 📝 성취도 총평")
-            raw_r = st.text_area("총평 메모 (대충 적기)", height=70, key="raw_r_input")
+            raw_r = st.text_area("총평 메모", height=70, key="g_raw_r")
             
             if st.button("✨ 총평 AI 변환", key="btn_r_ai"):
-                with st.spinner("AI 변환 중..."):
+                with st.spinner("변환 중..."):
                     ai_result = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
-                    st.session_state['final_r_input'] = ai_result
+                    st.session_state['g_final_r'] = ai_result
                     st.rerun()
             
-            final_r = st.text_area("최종 총평 (수정 가능)", height=80, key="final_r_input")
+            final_r = st.text_area("최종 총평", height=80, key="g_final_r")
 
             st.divider()
             
@@ -298,9 +320,24 @@ elif menu == "학생 관리 (상담/성적)":
                 row = [selected_student, period, hw, w_sc, w_av, sorted_wrong, save_m, a_sc, a_av, sorted_a_wrong, save_r]
                 
                 if add_row_to_sheet("weekly", row):
-                    st.success(f"✅ 저장 완료!")
-                    if 'final_m_input' in st.session_state: del st.session_state['final_m_input']
-                    if 'final_r_input' in st.session_state: del st.session_state['final_r_input']
+                    st.success(f"✅ 저장 완료! 다음 학생을 위해 입력창을 비웠습니다.")
+                    
+                    # [핵심] 저장 성공 시 입력창 강제 초기화 (월, 주차는 유지)
+                    st.session_state['g_hw'] = 80
+                    st.session_state['g_w_sc'] = 0
+                    st.session_state['g_w_av'] = 0
+                    st.session_state['g_wrong'] = ""
+                    
+                    st.session_state['g_raw_m'] = ""
+                    st.session_state['g_final_m'] = ""
+                    
+                    st.session_state['g_a_sc'] = 0
+                    st.session_state['g_a_av'] = 0
+                    st.session_state['g_a_wrong'] = ""
+                    
+                    st.session_state['g_raw_r'] = ""
+                    st.session_state['g_final_r'] = ""
+                    
                     st.rerun()
 
 
@@ -363,3 +400,5 @@ elif menu == "학생 관리 (상담/성적)":
                         st.warning("기간을 선택해주세요.")
                 else:
                     st.info("데이터가 없습니다.")
+
+```
