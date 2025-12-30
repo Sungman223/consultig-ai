@@ -91,7 +91,7 @@ def refine_text_ai(raw_text, context_type):
 st.set_page_config(page_title="강북청솔 학생 관리", layout="wide")
 st.title("👨‍🏫 김성만 선생님의 학생 관리 시스템")
 
-# [세션 초기화] - AI 결과를 저장할 변수들
+# [세션 초기화]
 if "counsel_result" not in st.session_state: st.session_state.counsel_result = ""
 if "memo_result" not in st.session_state: st.session_state.memo_result = ""
 if "rev_result" not in st.session_state: st.session_state.rev_result = ""
@@ -160,24 +160,20 @@ elif menu == "학생 관리 (상담/성적)":
             if st.button("✨ AI 다듬기", key="btn_c"):
                 if raw_c:
                     with st.spinner("AI가 문장을 다듬고 있습니다..."):
-                        # AI 결과 -> 세션 저장
                         st.session_state.counsel_result = refine_text_ai(raw_c, "학부모 상담 일지")
                 else:
                     st.warning("내용을 먼저 입력해주세요.")
 
-            # 3. 결과창 (세션 값을 기본값으로 사용)
-            # 사용자가 여기서 수정하면 그 값이 final_c에 담김
+            # 3. 결과창
             final_c = st.text_area("2. 최종 저장될 내용 (수정 가능)", value=st.session_state.counsel_result, height=150)
 
             # 4. 저장 버튼
             if st.button("💾 상담 내용 저장", type="primary"):
-                # AI 안 썼으면 원본(raw_c) 저장, 썼으면 수정본(final_c) 저장
                 content_to_save = final_c if final_c else raw_c
-                
                 if content_to_save:
                     if add_row_to_sheet("counseling", [selected_student, str(c_date), content_to_save]):
                         st.success("저장되었습니다.")
-                        st.session_state.counsel_result = "" # 저장 후 초기화
+                        st.session_state.counsel_result = "" 
                         st.rerun()
                 else:
                     st.warning("내용이 없습니다.")
@@ -226,17 +222,81 @@ elif menu == "학생 관리 (상담/성적)":
 
             st.write("")
             if st.button("💾 전체 성적 및 평가 저장", type="primary"):
-                # AI 결과 없으면 원본 저장
                 save_m = final_m if final_m else raw_m
                 save_r = final_r if final_r else raw_r
                 
                 row = [selected_student, period, hw, w_sc, w_av, wrong, save_m, a_sc, a_av, a_wrong, save_r]
                 if add_row_to_sheet("weekly", row):
                     st.success("저장 완료!")
-                    # 초기화
                     st.session_state.memo_result = ""
                     st.session_state.rev_result = ""
                     st.rerun()
 
         # --- [탭 3] 학부모 리포트 ---
+        # 여기 들여쓰기를 주의하세요! with tab3: 내부는 한 칸 더 들어가야 합니다.
         with tab3:
+            st.header(f"📑 {selected_student} 학생 학습 리포트")
+            st.divider()
+
+            df_w = load_data_from_sheet("weekly")
+            if not df_w.empty:
+                my_w = df_w[df_w["이름"] == selected_student]
+                if not my_w.empty:
+                    periods = my_w["시기"].tolist()
+                    sel_p = st.multiselect("기간 선택:", periods, default=periods)
+                    
+                    if sel_p:
+                        rep = my_w[my_w["시기"].isin(sel_p)].copy()
+
+                        # 오답 포맷팅
+                        def format_wrong(x):
+                            s = str(x).strip()
+                            if not s or s == '0': return ""
+                            s = s.replace(',', ' ')
+                            parts = s.split()
+                            return ', '.join(parts)
+
+                        if '오답번호' in rep.columns: rep['오답번호'] = rep['오답번호'].apply(format_wrong)
+                        if '성취도오답' in rep.columns: rep['성취도오답'] = rep['성취도오답'].apply(format_wrong)
+
+                        # 1. 그래프 (주간)
+                        st.subheader("1️⃣ 주간 과제 성취도")
+                        base = alt.Chart(rep).encode(x=alt.X('시기', sort=None))
+                        y_fix = alt.Scale(domain=[0, 100])
+                        
+                        c1 = (base.mark_line(color='#29b5e8').encode(y=alt.Y('주간점수', scale=y_fix)) + 
+                              base.mark_point(color='#29b5e8', size=100).encode(y='주간점수') + 
+                              base.mark_text(dy=-15, fontSize=14, color='#29b5e8', fontWeight='bold').encode(y='주간점수', text='주간점수') + 
+                              base.mark_line(color='gray', strokeDash=[5,5]).encode(y='주간평균'))
+                        st.altair_chart(c1, use_container_width=True)
+
+                        # 2. 그래프 (성취도)
+                        if "성취도점수" in rep.columns and rep["성취도점수"].sum() > 0:
+                            st.subheader("2️⃣ 성취도 평가 결과")
+                            ach_d = rep[rep["성취도점수"] > 0]
+                            base_ach = alt.Chart(ach_d).encode(x=alt.X('시기', sort=None))
+                            
+                            c2 = (base_ach.mark_line(color='#ff6c6c').encode(y=alt.Y('성취도점수', scale=y_fix)) + 
+                                  base_ach.mark_point(color='#ff6c6c', size=100).encode(y='성취도점수') + 
+                                  base_ach.mark_text(dy=-15, fontSize=14, color='#ff6c6c').encode(y='성취도점수', text='성취도점수') + 
+                                  base_ach.mark_line(color='gray', strokeDash=[5,5]).encode(y='성취도평균'))
+                            st.altair_chart(c2, use_container_width=True)
+
+                        # 3. 상세 표
+                        st.subheader("3️⃣ 상세 학습 내역")
+                        cols = ["시기", "과제", "주간점수", "주간평균", "오답번호", "특이사항", "성취도점수", "성취도평균", "성취도오답"]
+                        disp = rep[[c for c in cols if c in rep.columns]].copy()
+                        
+                        rename_map = {"시기":"시기", "과제":"과제(%)", "주간점수":"점수", "주간평균":"반평균", 
+                                      "오답번호":"주간오답", "특이사항":"코멘트", "성취도점수":"성취도", "성취도평균":"성취도평균", "성취도오답":"성취도오답"}
+                        disp.rename(columns=rename_map, inplace=True)
+                        st.table(disp.set_index("시기"))
+
+                        # 4. 총평
+                        for i, r in rep.iterrows():
+                            if r.get('총평'):
+                                st.info(f"**[{r['시기']} 성취도 총평]**\n\n{r['총평']}")
+                    else:
+                        st.warning("기간을 선택해주세요.")
+                else:
+                    st.info("데이터가 없습니다.")
