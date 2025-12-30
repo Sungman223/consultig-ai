@@ -70,7 +70,7 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         return False
 
 # ------------------------------------------
-# [유틸리티] 데이터 정리 함수들
+# [유틸리티] 데이터 정리 함수들 (강력해짐!)
 # ------------------------------------------
 def sort_numbers_string(text):
     """오답 번호 자동 정렬"""
@@ -80,25 +80,24 @@ def sort_numbers_string(text):
     sorted_nums = sorted([int(n) for n in numbers])
     return ", ".join(map(str, sorted_nums))
 
-def format_middle_school(text):
-    """중학교 이름 자동 완성 (풍생 -> 풍생중, 풍생중학교 -> 풍생중)"""
+def clean_school_name(text, target_type="middle"):
+    """
+    학교 이름 강력 자동 완성
+    입력: 풍생, 풍생중, 풍생중학, 풍생중학교 -> (중학교 모드) 풍생중
+    입력: 풍생, 풍생고, 풍생고등, 풍생고등학교 -> (고등학교 모드) 풍생고
+    """
     if not text: return ""
     text = text.strip()
-    if text.endswith("중학교"):
-        return text.replace("중학교", "중")
-    if not text.endswith("중"):
-        return text + "중"
-    return text
-
-def format_high_school(text):
-    """고등학교 이름 자동 완성 (풍생 -> 풍생고, 풍생고등학교 -> 풍생고)"""
-    if not text: return ""
-    text = text.strip()
-    if text.endswith("고등학교"):
-        return text.replace("고등학교", "고")
-    if not text.endswith("고"):
-        return text + "고"
-    return text
+    
+    # 1. 기존에 붙어있는 학교 관련 접미사 모두 제거 (뿌리 단어 추출)
+    # 예: 풍생중학 -> 풍생, 풍생고등학교 -> 풍생
+    root_name = re.sub(r'(고등학교|중학교|고등|중학|고|중)$', '', text)
+    
+    # 2. 목표 타입에 맞는 접미사 부착
+    if target_type == "middle":
+        return root_name + "중"
+    else:
+        return root_name + "고"
 
 def clean_class_name(text):
     """반 이름 대문자 변환"""
@@ -147,29 +146,31 @@ def refine_text_ai(raw_text, context_type, student_name):
 menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학생 등록"])
 
 # ------------------------------------------
-# 1. 신규 학생 등록 (학교명 자동완성 적용)
+# 1. 신규 학생 등록 (자동 초기화 & 강력 변환)
 # ------------------------------------------
 if menu == "신규 학생 등록":
     st.header("📝 신규 학생 등록")
-    st.info("💡 팁: 학교 이름에 '풍생'만 적어도 자동으로 '풍생중', '풍생고'로 저장됩니다.")
+    st.info("💡 팁: '풍생'만 입력해도 칸에 맞춰 자동으로 '풍생중', '풍생고'로 변환됩니다. **저장 후 입력창은 자동으로 비워집니다.**")
     
-    with st.form("new_student_form"):
+    # [핵심] clear_on_submit=True 설정으로 저장 후 입력창 자동 초기화
+    with st.form("new_student_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         name = col1.text_input("학생 이름")
-        ban = col2.text_input("반 (예: m1 -> M1)")
-        origin = st.text_input("출신 중학교 (예: 풍생 -> 풍생중)")
-        target = st.text_input("배정 예정 고등학교 (예: 풍생 -> 풍생고)")
+        ban = col2.text_input("반 (예: m1)")
+        origin = st.text_input("출신 중학교 (예: 풍생, 풍생중학)")
+        target = st.text_input("배정 예정 고등학교 (예: 풍생, 풍생고)")
         addr = st.text_input("거주지 (대략적)")
         
         if st.form_submit_button("💾 학생 등록"):
             if name:
-                # [핵심] 입력값 자동 표준화
+                # [핵심] 강력해진 학교명 변환 함수 사용
                 clean_ban = clean_class_name(ban)
-                clean_origin = format_middle_school(origin) # 중학교 자동완성
-                clean_target = format_high_school(target)   # 고등학교 자동완성
+                clean_origin = clean_school_name(origin, "middle") # 중학교 모드
+                clean_target = clean_school_name(target, "high")   # 고등학교 모드
                 
                 if add_row_to_sheet("students", [name, clean_ban, clean_origin, clean_target, addr]):
-                    st.success(f"{name} 학생 등록 완료! ({clean_ban}, {clean_origin} -> {clean_target})")
+                    st.success(f"✅ {name} 학생 등록 완료! ({clean_ban}, {clean_origin} -> {clean_target})")
+                    # 입력창은 clear_on_submit 덕분에 다음 턴에 자동으로 비워짐
 
 # ------------------------------------------
 # 2. 학생 관리
@@ -180,7 +181,6 @@ elif menu == "학생 관리 (상담/성적)":
     if df_students.empty:
         st.warning("학생 데이터가 없습니다. (구글 시트 연결 확인 필요)")
     else:
-        # 사이드바 리스트 (이름 + 반)
         student_display_list = [f"{row['이름']} ({row['반']})" for idx, row in df_students.iterrows()]
         selected_display = st.sidebar.selectbox("학생 선택", student_display_list)
         selected_student = selected_display.split(" (")[0]
@@ -192,7 +192,6 @@ elif menu == "학생 관리 (상담/성적)":
             st.sidebar.info(f"**{info['이름']} ({ban_txt})**\n\n🏫 {info['출신중']} ➡️ {info['배정고']}\n🏠 {info['거주지']}")
 
         st.write("")
-        # 고정형 메뉴바 (튕김 방지)
         selected_tab = st.radio(
             "작업 선택", 
             ["🗣️ 상담 일지", "📊 성적 입력", "👨‍👩‍👧‍👦 리포트"], 
