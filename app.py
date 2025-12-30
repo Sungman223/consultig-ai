@@ -9,7 +9,7 @@ import altair as alt
 import re
 
 # ==========================================
-# [중요] 페이지 설정은 무조건 맨 처음에!
+# [중요] 페이지 설정 (맨 위 고정)
 # ==========================================
 st.set_page_config(page_title="강북청솔 학생 관리", layout="wide")
 st.title("👨‍🏫 김성만 선생님의 학생 관리 시스템")
@@ -20,7 +20,7 @@ st.title("👨‍🏫 김성만 선생님의 학생 관리 시스템")
 GOOGLE_SHEET_KEY = "1zJHY7baJgoxyFJ5cBduCPVEfQ-pBPZ8jvhZNaPpCLY4"
 
 # ==========================================
-# [설정 2] 인증 및 연결 함수
+# [설정 2] 인증 및 연결 (캐시 적용으로 속도 제한 해결)
 # ==========================================
 @st.cache_resource
 def get_google_sheet_connection():
@@ -33,7 +33,7 @@ def get_google_sheet_connection():
     except Exception as e:
         return None
 
-# [핵심 수정] 60초(ttl=60) 동안 데이터를 기억해서 구글 괴롭히지 않기!
+# 데이터를 60초 동안 기억해서 429 에러 방지
 @st.cache_data(ttl=60)
 def load_data_from_sheet(worksheet_name):
     try:
@@ -56,7 +56,6 @@ def load_data_from_sheet(worksheet_name):
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
     except Exception as e:
-        # 에러가 나도 조용히 빈 데이터프레임 반환 (화면 멈춤 방지)
         return pd.DataFrame()
 
 def add_row_to_sheet(worksheet_name, row_data_list):
@@ -65,8 +64,7 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         if not client: return False
         sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
         sheet.append_row(row_data_list)
-        
-        # [핵심] 저장했으면 기억해둔 데이터를 지우고 새로 가져오게 함
+        # 저장 후 캐시 비우기 (바로 반영되도록)
         load_data_from_sheet.clear()
         return True
     except Exception as e:
@@ -74,7 +72,7 @@ def add_row_to_sheet(worksheet_name, row_data_list):
         return False
 
 # ==========================================
-# [설정 3] Gemini 2.0 Flash API 호출 (REST API)
+# [설정 3] Gemini 2.0 Flash API (REST API)
 # ==========================================
 def refine_text_ai(raw_text, context_type, student_name):
     if not raw_text:
@@ -82,12 +80,8 @@ def refine_text_ai(raw_text, context_type, student_name):
         
     try:
         api_key = st.secrets["GENAI_API_KEY"]
-        
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
-        
-        headers = {
-            'Content-Type': 'application/json'
-        }
+        headers = {'Content-Type': 'application/json'}
         
         prompt_text = f"""
         당신은 입시 수학 학원의 베테랑 선생님입니다. 
@@ -95,31 +89,22 @@ def refine_text_ai(raw_text, context_type, student_name):
         이 내용을 학부모님께 전달하거나 기록으로 남길 수 있도록 '정중하고 전문적인 문체'로 다듬어주세요.
         
         [강력한 지침사항]
-        1. **제목이나 소제목(예: '## 상담 보고', '**요약**', '알림' 등)을 절대 붙이지 마세요.**
-        2. 편지 형식(안녕하세요, 드림 등)도 금지입니다.
-        3. **군더더기 없이 바로 본론 문장부터 시작하세요.**
-        4. 학생 이름 '{student_name}'을 문장 주어로 자연스럽게 사용하세요.
-        5. 핵심 내용을 간결하게 정리하세요.
+        1. 제목, 소제목, 인사말(안녕하세요 등) 절대 금지.
+        2. 바로 본론 문장부터 시작하세요.
+        3. 학생 이름 '{student_name}'을 문장 주어로 자연스럽게 사용하세요.
         
         [원문]: {raw_text}
         """
         
-        data = {
-            "contents": [{
-                "parts": [{"text": prompt_text}]
-            }]
-        }
-        
+        data = {"contents": [{"parts": [{"text": prompt_text}]}]}
         response = requests.post(url, headers=headers, data=json.dumps(data))
         
         if response.status_code == 200:
-            result = response.json()
-            return result['candidates'][0]['content']['parts'][0]['text']
+            return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            return f"AI 연결 오류 ({response.status_code}): {response.text}"
-            
+            return f"AI 에러: {response.status_code}"
     except Exception as e:
-        return f"통신 오류 발생: {e}"
+        return f"통신 에러: {e}"
 
 # ==========================================
 # 메인 앱 화면
@@ -137,7 +122,7 @@ menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학�
 # ------------------------------------------
 if menu == "신규 학생 등록":
     st.header("📝 신규 학생 등록")
-    with st.form("new_student"):
+    with st.form("new_student_form"):
         col1, col2 = st.columns(2)
         name = col1.text_input("학생 이름")
         ban = col2.text_input("반 (Class)")
@@ -145,11 +130,10 @@ if menu == "신규 학생 등록":
         target = st.text_input("배정 예정 고등학교")
         addr = st.text_input("거주지 (대략적)")
         
-        if st.form_submit_button("등록"):
+        if st.form_submit_button("💾 학생 등록"):
             if name:
                 if add_row_to_sheet("students", [name, ban, origin, target, addr]):
                     st.success(f"{name} 학생 등록 완료!")
-                    st.balloons()
 
 # ------------------------------------------
 # 2. 학생 관리
@@ -158,7 +142,7 @@ elif menu == "학생 관리 (상담/성적)":
     df_students = load_data_from_sheet("students")
     
     if df_students.empty:
-        st.warning("학생 데이터가 없습니다. (구글 시트 연결 상태를 점검하거나 잠시 후 다시 시도하세요)")
+        st.warning("학생 데이터가 없습니다. (구글 시트 연결 확인 필요)")
     else:
         student_list = df_students["이름"].tolist()
         selected_student = st.sidebar.selectbox("학생 선택", student_list)
@@ -169,7 +153,7 @@ elif menu == "학생 관리 (상담/성적)":
             ban_txt = info['반'] if '반' in info else ''
             st.sidebar.info(f"**{info['이름']} ({ban_txt})**\n\n🏫 {info['출신중']} ➡️ {info['배정고']}\n🏠 {info['거주지']}")
 
-        tab1, tab2, tab3 = st.tabs(["🗣️ 상담 일지 (AI)", "📊 주간 학습 & 성취도 입력", "👨‍👩‍👧‍👦 학부모 전송용 리포트"])
+        tab1, tab2, tab3 = st.tabs(["🗣️ 상담 일지", "📊 성적 입력 (안정형)", "👨‍👩‍👧‍👦 리포트"])
 
         # --- [탭 1] 상담 일지 ---
         with tab1:
@@ -184,94 +168,101 @@ elif menu == "학생 관리 (상담/성적)":
                         st.info(r['내용'])
 
             st.divider()
-            st.write("#### ✍️ 새로운 상담 입력")
-            c_date = st.date_input("날짜", datetime.date.today())
             
-            c1, c2 = st.columns([3, 1])
-            with c1:
-                raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80, key="input_c")
-            with c2:
-                st.write("")
-                st.write("")
-                if st.button("✨ AI 다듬기", key="btn_c"):
-                    if raw_c:
-                        with st.spinner("다듬는 중..."):
-                            st.session_state.counsel_result = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
-            
-            final_c = st.text_area("2. 최종 저장될 내용 (수정 가능)", value=st.session_state.counsel_result, height=150)
+            # [수정] 폼 적용: 입력 중에 새로고침 방지
+            with st.form("counsel_form"):
+                st.write("#### ✍️ 새로운 상담 입력")
+                c_date = st.date_input("날짜", datetime.date.today())
+                raw_c = st.text_area("1. 상담 메모 (대충 적으세요)", height=80)
+                
+                # 버튼을 2개로 분리 (미리보기 / 저장)
+                col_btn1, col_btn2 = st.columns(2)
+                preview_click = col_btn1.form_submit_button("👀 AI 변환 미리보기")
+                save_click = col_btn2.form_submit_button("💾 최종 저장", type="primary")
 
-            if st.button("💾 상담 내용 저장", type="primary"):
-                content_to_save = final_c if final_c else raw_c
-                if content_to_save:
-                    if add_row_to_sheet("counseling", [selected_student, str(c_date), content_to_save]):
-                        st.success("저장되었습니다.")
-                        st.session_state.counsel_result = "" 
-                        st.rerun()
-                else:
-                    st.warning("내용이 없습니다.")
+                if preview_click and raw_c:
+                    st.session_state.counsel_result = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
+                    st.rerun()
 
-        # --- [탭 2] 성적 입력 ---
+                if save_click:
+                    content = st.session_state.counsel_result if st.session_state.counsel_result else raw_c
+                    if content:
+                        if add_row_to_sheet("counseling", [selected_student, str(c_date), content]):
+                            st.success("상담 내용이 저장되었습니다!")
+                            st.session_state.counsel_result = "" # 초기화
+                            st.rerun()
+                    else:
+                        st.error("내용을 입력해주세요.")
+
+            if st.session_state.counsel_result:
+                st.info(f"**[AI 변환 결과]**\n{st.session_state.counsel_result}")
+
+
+        # --- [탭 2] 성적 입력 (폼 적용 완료) ---
         with tab2:
             st.subheader("📊 성적 데이터 입력")
-            c1, c2 = st.columns(2)
-            mon = c1.selectbox("월", [f"{i}월" for i in range(1, 13)])
-            wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
-            period = f"{mon} {wk}"
-
-            st.markdown("##### 📝 주간 과제")
-            cc1, cc2, cc3 = st.columns(3)
-            hw = cc1.number_input("수행도(%)", 0, 100, 80)
-            w_sc = cc2.number_input("점수", 0, 100, 0)
-            w_av = cc3.number_input("반 평균", 0, 100, 0)
-            wrong = st.text_input("주간 오답 (띄어쓰기 구분)", placeholder="예: 13 15 22")
             
-            # 특이사항 AI
-            mc1, mc2 = st.columns([3, 1])
-            with mc1:
-                raw_m = st.text_area("특이사항 메모 (대충 적기)", height=60, key="input_m")
-            with mc2:
-                st.write("")
-                if st.button("✨ 특이사항 다듬기", key="btn_m"):
-                    if raw_m:
-                        with st.spinner("AI 작업 중..."):
-                            st.session_state.memo_result = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
-            
-            final_m = st.text_area("최종 특이사항", value=st.session_state.memo_result, height=80)
+            # [핵심 수정] 모든 입력을 폼 안에 넣어서 '저장' 누르기 전엔 조용히 시킴
+            with st.form("grade_form"):
+                c1, c2 = st.columns(2)
+                mon = c1.selectbox("월", [f"{i}월" for i in range(1, 13)])
+                wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
+                period = f"{mon} {wk}"
 
-            st.divider()
+                st.markdown("##### 📝 주간 과제 & 점수")
+                cc1, cc2, cc3 = st.columns(3)
+                hw = cc1.number_input("수행도(%)", 0, 100, 80)
+                w_sc = cc2.number_input("주간 테스트 점수", 0, 100, 0)
+                w_av = cc3.number_input("반 평균", 0, 100, 0)
+                wrong = st.text_input("주간 오답 번호 (띄어쓰기로 구분)", placeholder="예: 13 15 22")
+                
+                raw_m = st.text_area("특이사항 메모 (대충 적으면 AI가 다듬어줍니다)")
 
-            st.markdown("##### 🏆 성취도 평가")
-            with st.expander("입력창 열기", expanded=True):
+                st.divider()
+                st.markdown("##### 🏆 성취도 평가")
                 cc4, cc5 = st.columns(2)
                 a_sc = cc4.number_input("성취도 점수", 0, 100, 0)
                 a_av = cc5.number_input("성취도 평균", 0, 100, 0)
-                a_wrong = st.text_input("성취도 오답 (띄어쓰기 구분)", placeholder="예: 21 29 30")
-                
-                # 총평 AI
-                rc1, rc2 = st.columns([3, 1])
-                with rc1:
-                    raw_r = st.text_area("총평 메모 (대충 적기)", height=60, key="input_r")
-                with rc2:
-                    st.write("")
-                    if st.button("✨ 총평 다듬기", key="btn_r"):
-                        if raw_r:
-                            with st.spinner("AI 작업 중..."):
-                                st.session_state.rev_result = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
-                
-                final_r = st.text_area("최종 총평", value=st.session_state.rev_result, height=100)
+                a_wrong = st.text_input("성취도 오답 번호", placeholder="예: 21 29 30")
+                raw_r = st.text_area("총평 메모")
 
-            st.write("")
-            if st.button("💾 전체 성적 및 평가 저장", type="primary"):
-                save_m = final_m if final_m else raw_m
-                save_r = final_r if final_r else raw_r
-                
-                row = [selected_student, period, hw, w_sc, w_av, wrong, save_m, a_sc, a_av, a_wrong, save_r]
-                
-                if add_row_to_sheet("weekly", row):
-                    st.success("저장 완료!")
-                    st.session_state.memo_result = ""
-                    st.session_state.rev_result = ""
+                # 폼 제출 버튼들
+                st.write("")
+                f_col1, f_col2 = st.columns(2)
+                grade_preview = f_col1.form_submit_button("👀 AI 내용 미리보기")
+                grade_save = f_col2.form_submit_button("💾 전체 저장하기", type="primary")
+
+                # 로직 처리
+                if grade_preview:
+                    if raw_m:
+                        st.session_state.memo_result = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
+                    if raw_r:
+                        st.session_state.rev_result = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
                     st.rerun()
+
+                if grade_save:
+                    # AI 결과가 있으면 그거 쓰고, 없으면 원본 메모 씀
+                    final_m = st.session_state.memo_result if st.session_state.memo_result else raw_m
+                    final_r = st.session_state.rev_result if st.session_state.rev_result else raw_r
+                    
+                    row = [selected_student, period, hw, w_sc, w_av, wrong, final_m, a_sc, a_av, a_wrong, final_r]
+                    
+                    if add_row_to_sheet("weekly", row):
+                        st.success("✅ 성적 및 평가가 성공적으로 저장되었습니다!")
+                        # 저장 후 세션 비우기
+                        st.session_state.memo_result = ""
+                        st.session_state.rev_result = ""
+                        st.rerun()
+
+            # 미리보기 결과 보여주기 (폼 바깥)
+            if st.session_state.memo_result or st.session_state.rev_result:
+                st.divider()
+                st.write("📢 **AI 변환 미리보기 (저장 버튼을 눌러야 반영됩니다!)**")
+                if st.session_state.memo_result:
+                    st.info(f"**[특이사항]** {st.session_state.memo_result}")
+                if st.session_state.rev_result:
+                    st.info(f"**[총평]** {st.session_state.rev_result}")
+
 
         # --- [탭 3] 학부모 리포트 ---
         with tab3:
@@ -288,7 +279,6 @@ elif menu == "학생 관리 (상담/성적)":
                     if sel_p:
                         rep = my_w[my_w["시기"].isin(sel_p)].copy()
 
-                        # 오답 포맷팅
                         def format_wrong(x):
                             s = str(x).strip()
                             if not s or s == '0': return ""
@@ -299,7 +289,6 @@ elif menu == "학생 관리 (상담/성적)":
                         if '오답번호' in rep.columns: rep['오답번호'] = rep['오답번호'].apply(format_wrong)
                         if '성취도오답' in rep.columns: rep['성취도오답'] = rep['성취도오답'].apply(format_wrong)
 
-                        # 1. 그래프 (주간)
                         st.subheader("1️⃣ 주간 과제 성취도")
                         base = alt.Chart(rep).encode(x=alt.X('시기', sort=None))
                         y_fix = alt.Scale(domain=[0, 100])
@@ -310,7 +299,6 @@ elif menu == "학생 관리 (상담/성적)":
                               base.mark_line(color='gray', strokeDash=[5,5]).encode(y='주간평균'))
                         st.altair_chart(c1, use_container_width=True)
 
-                        # 2. 그래프 (성취도)
                         if "성취도점수" in rep.columns and rep["성취도점수"].sum() > 0:
                             st.subheader("2️⃣ 성취도 평가 결과")
                             ach_d = rep[rep["성취도점수"] > 0]
@@ -322,7 +310,6 @@ elif menu == "학생 관리 (상담/성적)":
                                   base_ach.mark_line(color='gray', strokeDash=[5,5]).encode(y='성취도평균'))
                             st.altair_chart(c2, use_container_width=True)
 
-                        # 3. 상세 표
                         st.subheader("3️⃣ 상세 학습 내역")
                         cols = ["시기", "과제", "주간점수", "주간평균", "오답번호", "특이사항", "성취도점수", "성취도평균", "성취도오답"]
                         disp = rep[[c for c in cols if c in rep.columns]].copy()
@@ -332,7 +319,6 @@ elif menu == "학생 관리 (상담/성적)":
                         disp.rename(columns=rename_map, inplace=True)
                         st.table(disp.set_index("시기"))
 
-                        # 4. 총평
                         for i, r in rep.iterrows():
                             if r.get('총평'):
                                 st.info(f"**[{r['시기']} 성취도 총평]**\n\n{r['총평']}")
