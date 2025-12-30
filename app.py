@@ -86,18 +86,20 @@ def clean_class_name(text):
     return text.upper().strip()
 
 # ==========================================
-# 4. AI 함수
+# 4. AI 함수 (Gemini 2.0 Flash Exp)
 # ==========================================
 def refine_text_ai(raw_text, context_type, student_name):
     if not raw_text: return ""
     try:
         api_key = st.secrets["GENAI_API_KEY"]
+        # 요청하신 2.0 Flash Experimental 모델 사용
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
         headers = {'Content-Type': 'application/json'}
         prompt_text = f"""
         당신은 입시 수학 학원의 베테랑 선생님입니다. 
         아래 메모는 '{student_name}' 학생에 대한 내용입니다.
         학부모님께 전달할 수 있도록 '정중하고 전문적인 문체'로 다듬어주세요.
+        핵심 내용은 유지하되 문장을 매끄럽게 교정하세요.
         [지침] 제목/인사말 제외, 본론만 작성, 학생 이름 주어 사용.
         [원문]: {raw_text}
         """
@@ -114,24 +116,22 @@ def refine_text_ai(raw_text, context_type, student_name):
 # 5. [핵심] 콜백 함수 (저장 및 초기화 담당)
 # ==========================================
 def save_counseling_callback(student, date):
-    # 세션 상태에서 값 가져오기
     raw = st.session_state.get('c_raw_input', "")
     final = st.session_state.get('c_final_input', "")
     
-    # [기능] AI 변환 안 했으면 원본 사용
     content_to_save = final.strip() if final.strip() else raw.strip()
     
     if content_to_save:
         if add_row_to_sheet("counseling", [student, str(date), content_to_save]):
             st.toast(f"✅ {student} 상담 내용 저장 완료!")
-            # [기능] 저장 후 입력창 비우기
+            # 저장 후 입력창 비우기
             st.session_state['c_raw_input'] = ""
             st.session_state['c_final_input'] = ""
     else:
         st.toast("⚠️ 내용이 없어 저장하지 않았습니다.")
 
 def save_grades_callback(student, period):
-    # 세션 상태에서 모든 값 가져오기
+    # 세션 상태에서 값 가져오기
     hw = st.session_state.get('g_hw', 80)
     w_sc = st.session_state.get('g_w_sc', 0)
     w_av = st.session_state.get('g_w_av', 0)
@@ -157,7 +157,7 @@ def save_grades_callback(student, period):
     
     if add_row_to_sheet("weekly", row):
         st.toast(f"✅ {student} 성적 저장 완료! 입력창을 비웠습니다.")
-        # [기능] 저장 후 모든 입력창 초기화
+        # 저장 후 모든 입력창 초기화 (Reset)
         st.session_state['g_hw'] = 80
         st.session_state['g_w_sc'] = 0
         st.session_state['g_w_av'] = 0
@@ -202,6 +202,7 @@ elif menu == "학생 관리 (상담/성적)":
     if df_students.empty:
         st.warning("학생 데이터가 없습니다.")
     else:
+        # 학생 선택
         student_display_list = [f"{row['이름']} ({row['반']})" for idx, row in df_students.iterrows()]
         selected_display = st.sidebar.selectbox("학생 선택", student_display_list)
         selected_student = selected_display.split(" (")[0]
@@ -216,7 +217,7 @@ elif menu == "학생 관리 (상담/성적)":
         selected_tab = st.radio("작업 선택", ["🗣️ 상담 일지", "📊 성적 입력", "👨‍👩‍👧‍👦 리포트"], horizontal=True, label_visibility="collapsed")
         st.divider()
 
-        # --- 상담 일지 탭 ---
+        # --- [탭 1] 상담 일지 ---
         if selected_tab == "🗣️ 상담 일지":
             st.subheader(f"{selected_student} 상담 기록")
             df_c = load_data_from_sheet("counseling")
@@ -231,7 +232,13 @@ elif menu == "학생 관리 (상담/성적)":
             st.write("#### ✍️ 새로운 상담 입력")
             c_date = st.date_input("날짜", datetime.date.today())
             
+            # [초기화] 세션 상태에 키가 없으면 초기화
+            if 'c_raw_input' not in st.session_state: st.session_state['c_raw_input'] = ""
+            if 'c_final_input' not in st.session_state: st.session_state['c_final_input'] = ""
+
+            # [입력] value=... 제거 (세션 상태가 관리)
             raw_c = st.text_area("1. 상담 메모", height=80, key="c_raw_input")
+            
             if st.button("✨ AI 변환", key="btn_c_ai"):
                 with st.spinner("변환 중..."):
                     ai_result = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
@@ -240,10 +247,9 @@ elif menu == "학생 관리 (상담/성적)":
             
             final_c = st.text_area("2. 최종 내용", height=150, key="c_final_input")
             
-            # [수정] 콜백 함수 사용
             st.button("💾 상담 내용 저장", type="primary", on_click=save_counseling_callback, args=(selected_student, c_date))
 
-        # --- 성적 입력 탭 ---
+        # --- [탭 2] 성적 입력 ---
         elif selected_tab == "📊 성적 입력":
             st.subheader("📊 성적 데이터 입력")
             
@@ -252,12 +258,27 @@ elif menu == "학생 관리 (상담/성적)":
             wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
             period = f"{mon} {wk}"
 
+            # [초기화] 변수들이 세션에 없으면 초기값 등록
+            if 'g_hw' not in st.session_state: st.session_state['g_hw'] = 80
+            if 'g_w_sc' not in st.session_state: st.session_state['g_w_sc'] = 0
+            if 'g_w_av' not in st.session_state: st.session_state['g_w_av'] = 0
+            if 'g_wrong' not in st.session_state: st.session_state['g_wrong'] = ""
+            if 'g_raw_m' not in st.session_state: st.session_state['g_raw_m'] = ""
+            if 'g_final_m' not in st.session_state: st.session_state['g_final_m'] = ""
+            if 'g_a_sc' not in st.session_state: st.session_state['g_a_sc'] = 0
+            if 'g_a_av' not in st.session_state: st.session_state['g_a_av'] = 0
+            if 'g_a_wrong' not in st.session_state: st.session_state['g_a_wrong'] = ""
+            if 'g_raw_r' not in st.session_state: st.session_state['g_raw_r'] = ""
+            if 'g_final_r' not in st.session_state: st.session_state['g_final_r'] = ""
+
             st.markdown("##### 📝 주간 과제 & 점수")
             cc1, cc2, cc3 = st.columns(3)
-            st.number_input("수행도(%)", 0, 100, 80, key="g_hw")
-            st.number_input("주간 과제 점수", 0, 100, 0, key="g_w_sc")
-            st.number_input("주간과제 평균점수", 0, 100, 0, key="g_w_av")
+            # [수정] value=80 삭제 (위의 세션 초기화 코드가 대신함)
+            st.number_input("수행도(%)", 0, 100, key="g_hw")
+            st.number_input("주간 과제 점수", 0, 100, key="g_w_sc")
+            st.number_input("주간과제 평균점수", 0, 100, key="g_w_av")
             st.text_input("주간 과제 오답 번호", placeholder="예: 3 1 2", key="g_wrong")
+            
             st.divider()
 
             st.markdown("##### 📢 학습 태도 및 특이사항")
@@ -268,12 +289,13 @@ elif menu == "학생 관리 (상담/성적)":
                     st.session_state['g_final_m'] = res
                     st.rerun()
             st.text_area("최종 특이사항", height=80, key="g_final_m")
+            
             st.divider()
 
             st.markdown("##### 🏆 성취도 평가")
             cc4, cc5 = st.columns(2)
-            st.number_input("성취도 평가 점수", 0, 100, 0, key="g_a_sc")
-            st.number_input("성취도 평가 점수 평균", 0, 100, 0, key="g_a_av")
+            st.number_input("성취도 평가 점수", 0, 100, key="g_a_sc")
+            st.number_input("성취도 평가 점수 평균", 0, 100, key="g_a_av")
             st.text_input("성취도평가 오답번호", placeholder="예: 21 29 30", key="g_a_wrong")
             
             st.markdown("##### 📝 성취도 총평")
@@ -284,12 +306,12 @@ elif menu == "학생 관리 (상담/성적)":
                     st.session_state['g_final_r'] = res
                     st.rerun()
             st.text_area("최종 총평", height=80, key="g_final_r")
+            
             st.divider()
             
-            # [수정] 콜백 함수 사용
             st.button("💾 전체 성적 및 평가 저장", type="primary", use_container_width=True, on_click=save_grades_callback, args=(selected_student, period))
 
-        # --- 리포트 탭 ---
+        # --- [탭 3] 리포트 ---
         elif selected_tab == "👨‍👩‍👧‍👦 리포트":
             st.header(f"📑 {selected_student} 학생 학습 리포트")
             st.divider()
