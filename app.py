@@ -19,30 +19,7 @@ st.title("👨‍🏫 김성만 선생님의 학생 관리 시스템")
 # ==========================================
 GOOGLE_SHEET_KEY = "1zJHY7baJgoxyFJ5cBduCPVEfQ-pBPZ8jvhZNaPpCLY4"
 
-# [진단 코드] 시스템 연결 상태 확인
-with st.sidebar.expander("🔧 시스템 연결 진단 (디버깅용)", expanded=True):
-    st.write("Checking connection...")
-    try:
-        if "gcp_service_account" in st.secrets:
-            st.success("✅ Secrets 설정 확인됨")
-        else:
-            st.error("🚨 Secrets 설정이 비어있음!")
-
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        
-        doc = client.open_by_key(GOOGLE_SHEET_KEY)
-        st.success(f"✅ 시트 파일 연결 성공: {doc.title}")
-        
-        sheets = [ws.title for ws in doc.worksheets()]
-        st.info(f"발견된 시트 탭 목록:\n{sheets}")
-        
-    except Exception as e:
-        st.error(f"🚨 연결 실패! 에러 로그:\n{e}")
-
-# 캐시 없이 직접 연결 (안정성 확보)
+@st.cache_resource
 def get_google_sheet_connection():
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -53,50 +30,44 @@ def get_google_sheet_connection():
     except Exception as e:
         return None
 
-# 데이터 로드 함수 (에러 메시지 출력 기능 포함)
+@st.cache_data(ttl=60)
 def load_data_from_sheet(worksheet_name):
     try:
         client = get_google_sheet_connection()
-        if not client: 
-            st.error("구글 클라이언트 연결 실패")
-            return pd.DataFrame()
-
+        if not client: return pd.DataFrame()
+        
+        # 시트 파일 열기
         sheet_file = client.open_by_key(GOOGLE_SHEET_KEY)
+        sheet = sheet_file.worksheet(worksheet_name)
         
-        try:
-            sheet = sheet_file.worksheet(worksheet_name)
-        except gspread.WorksheetNotFound:
-            st.error(f"🚨 [에러] '{worksheet_name}' 탭을 찾을 수 없습니다.")
-            return pd.DataFrame()
-
         data = sheet.get_all_values()
+        if len(data) < 2: return pd.DataFrame()
         
-        if len(data) < 2: 
-            st.warning(f"'{worksheet_name}' 시트에 데이터가 없거나 헤더만 있습니다.")
-            return pd.DataFrame()
-            
         headers = data[0]
         rows = data[1:]
         df = pd.DataFrame(rows, columns=headers)
         
+        # 숫자 컬럼 변환
         numeric_cols = ['주간점수', '주간평균', '성취도점수', '성취도평균', '과제']
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.replace(',', '')
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
-
     except Exception as e:
-        st.error(f"🚨 데이터 로드 중 에러 발생 ({worksheet_name}): {e}")
+        # 에러 발생 시 빈 데이터프레임 반환 (화면에는 조용히 처리)
         return pd.DataFrame()
 
-# 데이터 저장 함수
 def add_row_to_sheet(worksheet_name, row_data_list):
     try:
         client = get_google_sheet_connection()
         if not client: return False
+        
         sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
         sheet.append_row(row_data_list)
+        
+        # 캐시 초기화 (데이터 갱신을 위해)
+        load_data_from_sheet.clear()
         return True
     except Exception as e:
         st.error(f"저장 실패: {e}")
