@@ -17,10 +17,61 @@ st.title("👨‍🏫 김성만 선생님의 학생 관리 시스템")
 # ==========================================
 # 2. 구글 시트 및 API 설정
 # ==========================================
+# 선생님이 알려주신 시트 키입니다.
 GOOGLE_SHEET_KEY = "1zJHY7baJgoxyFJ5cBduCPVEfQ-pBPZ8jvhZNaPpCLY4"
 
-@st.cache_resource
-def get_google_sheet_connection():
+# [진단 기능] 연결 상태를 확인하고 에러를 출력하는 함수
+def run_diagnostics():
+    with st.sidebar.expander("🔧 시스템 연결 진단 (에러 확인용)", expanded=True):
+        st.write("🔄 연결 상태 점검 중...")
+        
+        # 1. Secrets 확인
+        if "gcp_service_account" not in st.secrets:
+            st.error("❌ 1. Secrets 설정이 비어있습니다!")
+            st.info("Manage App > Settings > Secrets에 키 값을 넣어주세요.")
+            return None
+        else:
+            st.success("✅ 1. Secrets 설정 확인됨")
+
+        # 2. 구글 인증 시도
+        try:
+            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            client = gspread.authorize(creds)
+            st.success("✅ 2. 구글 인증 성공")
+        except Exception as e:
+            st.error(f"❌ 2. 인증 실패: {e}")
+            return None
+
+        # 3. 스프레드시트 파일 접근 시도
+        try:
+            doc = client.open_by_key(GOOGLE_SHEET_KEY)
+            st.success(f"✅ 3. 시트 파일 접근 성공: {doc.title}")
+            
+            # 탭 목록 가져오기
+            tabs = [ws.title for ws in doc.worksheets()]
+            st.info(f"📂 발견된 탭 목록: {tabs}")
+            
+            # 필수 탭 확인
+            required_tabs = ["students", "counseling", "weekly"]
+            missing_tabs = [t for t in required_tabs if t not in tabs]
+            
+            if missing_tabs:
+                st.error(f"🚨 [중요] 다음 탭이 없습니다: {missing_tabs}")
+                st.warning("구글 시트 하단의 탭 이름이 정확한지(띄어쓰기 등) 확인해주세요.")
+            else:
+                st.success("✅ 필수 탭(students, counseling, weekly) 모두 존재함")
+                
+        except Exception as e:
+            st.error(f"❌ 3. 시트 파일 열기 실패: {e}")
+            st.warning("시트 키(GOOGLE_SHEET_KEY)가 정확한지, 공유 권한이 있는지 확인하세요.")
+            return None
+            
+        return client
+
+# 캐시 사용하지 않고 매번 연결 (디버깅용)
+def get_google_sheet_connection_direct():
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds_dict = dict(st.secrets["gcp_service_account"])
@@ -30,33 +81,50 @@ def get_google_sheet_connection():
     except Exception as e:
         return None
 
-@st.cache_data(ttl=60)
+# [수정됨] 에러 발생 시 내용을 화면에 보여주도록 수정
 def load_data_from_sheet(worksheet_name):
     try:
-        client = get_google_sheet_connection()
-        if not client: return pd.DataFrame()
-        sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
+        client = get_google_sheet_connection_direct()
+        if not client: 
+            return pd.DataFrame() # 위 진단 함수에서 에러가 이미 떴을 것임
+            
+        doc = client.open_by_key(GOOGLE_SHEET_KEY)
+        
+        try:
+            sheet = doc.worksheet(worksheet_name)
+        except gspread.WorksheetNotFound:
+            st.error(f"🚨 [치명적 에러] '{worksheet_name}' 탭을 찾을 수 없습니다.")
+            return pd.DataFrame()
+            
         data = sheet.get_all_values()
-        if len(data) < 2: return pd.DataFrame()
+        
+        if len(data) < 2: 
+            st.warning(f"⚠️ '{worksheet_name}' 탭에 데이터가 없거나 헤더만 있습니다.")
+            return pd.DataFrame()
+            
         headers = data[0]
         rows = data[1:]
         df = pd.DataFrame(rows, columns=headers)
+        
+        # 숫자 변환 로직
         numeric_cols = ['주간점수', '주간평균', '성취도점수', '성취도평균', '과제']
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.replace(',', '')
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
+        
     except Exception as e:
+        st.error(f"🚨 '{worksheet_name}' 데이터 로드 중 에러: {e}")
         return pd.DataFrame()
 
 def add_row_to_sheet(worksheet_name, row_data_list):
     try:
-        client = get_google_sheet_connection()
+        client = get_google_sheet_connection_direct()
         if not client: return False
         sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
         sheet.append_row(row_data_list)
-        load_data_from_sheet.clear()
+        st.cache_data.clear() # 저장 후 캐시 초기화
         return True
     except Exception as e:
         st.error(f"저장 실패: {e}")
@@ -86,13 +154,12 @@ def clean_class_name(text):
     return text.upper().strip()
 
 # ==========================================
-# 4. AI 함수 (Gemini 2.0 Flash Exp)
+# 4. AI 함수
 # ==========================================
 def refine_text_ai(raw_text, context_type, student_name):
     if not raw_text: return ""
     try:
         api_key = st.secrets["GENAI_API_KEY"]
-        # 요청하신 2.0 Flash Experimental 모델 사용
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
         headers = {'Content-Type': 'application/json'}
         prompt_text = f"""
@@ -113,25 +180,22 @@ def refine_text_ai(raw_text, context_type, student_name):
         return f"통신 에러: {e}"
 
 # ==========================================
-# 5. [핵심] 콜백 함수 (저장 및 초기화 담당)
+# 5. 콜백 함수
 # ==========================================
 def save_counseling_callback(student, date):
     raw = st.session_state.get('c_raw_input', "")
     final = st.session_state.get('c_final_input', "")
-    
     content_to_save = final.strip() if final.strip() else raw.strip()
     
     if content_to_save:
         if add_row_to_sheet("counseling", [student, str(date), content_to_save]):
             st.toast(f"✅ {student} 상담 내용 저장 완료!")
-            # 저장 후 입력창 비우기
             st.session_state['c_raw_input'] = ""
             st.session_state['c_final_input'] = ""
     else:
         st.toast("⚠️ 내용이 없어 저장하지 않았습니다.")
 
 def save_grades_callback(student, period):
-    # 세션 상태에서 값 가져오기
     hw = st.session_state.get('g_hw', 80)
     w_sc = st.session_state.get('g_w_sc', 0)
     w_av = st.session_state.get('g_w_av', 0)
@@ -149,15 +213,13 @@ def save_grades_callback(student, period):
     final_r = st.session_state.get('g_final_r', "")
     save_r = final_r.strip() if final_r.strip() else raw_r.strip()
     
-    # 오답 정렬
     sorted_wrong = sort_numbers_string(wrong)
     sorted_a_wrong = sort_numbers_string(a_wrong)
     
     row = [student, period, hw, w_sc, w_av, sorted_wrong, save_m, a_sc, a_av, sorted_a_wrong, save_r]
     
     if add_row_to_sheet("weekly", row):
-        st.toast(f"✅ {student} 성적 저장 완료! 입력창을 비웠습니다.")
-        # 저장 후 모든 입력창 초기화 (Reset)
+        st.toast(f"✅ {student} 성적 저장 완료!")
         st.session_state['g_hw'] = 80
         st.session_state['g_w_sc'] = 0
         st.session_state['g_w_av'] = 0
@@ -173,6 +235,10 @@ def save_grades_callback(student, period):
 # ==========================================
 # 6. 메인 앱 화면
 # ==========================================
+
+# [중요] 앱 시작 시 진단부터 실행
+client = run_diagnostics()
+
 menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학생 등록"])
 
 if menu == "신규 학생 등록":
@@ -194,13 +260,14 @@ if menu == "신규 학생 등록":
                 clean_target = clean_school_name(target, "high")
                 
                 if add_row_to_sheet("students", [name, clean_ban, clean_origin, clean_target, addr]):
-                    st.success(f"✅ {name} 등록 완료! ({clean_ban}, {clean_origin} -> {clean_target})")
+                    st.success(f"✅ {name} 등록 완료!")
 
 elif menu == "학생 관리 (상담/성적)":
+    # 여기서 에러가 나면 load_data_from_sheet 함수가 에러 메시지를 띄워줄 것임
     df_students = load_data_from_sheet("students")
     
     if df_students.empty:
-        st.warning("학생 데이터가 없습니다.")
+        st.warning("⚠️ 학생 데이터가 비어있습니다. 왼쪽 사이드바의 진단 메시지를 확인해주세요.")
     else:
         # 학생 선택
         student_display_list = [f"{row['이름']} ({row['반']})" for idx, row in df_students.iterrows()]
@@ -232,11 +299,9 @@ elif menu == "학생 관리 (상담/성적)":
             st.write("#### ✍️ 새로운 상담 입력")
             c_date = st.date_input("날짜", datetime.date.today())
             
-            # [초기화] 세션 상태에 키가 없으면 초기화
             if 'c_raw_input' not in st.session_state: st.session_state['c_raw_input'] = ""
             if 'c_final_input' not in st.session_state: st.session_state['c_final_input'] = ""
 
-            # [입력] value=... 제거 (세션 상태가 관리)
             raw_c = st.text_area("1. 상담 메모", height=80, key="c_raw_input")
             
             if st.button("✨ AI 변환", key="btn_c_ai"):
@@ -258,7 +323,6 @@ elif menu == "학생 관리 (상담/성적)":
             wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
             period = f"{mon} {wk}"
 
-            # [초기화] 변수들이 세션에 없으면 초기값 등록
             if 'g_hw' not in st.session_state: st.session_state['g_hw'] = 80
             if 'g_w_sc' not in st.session_state: st.session_state['g_w_sc'] = 0
             if 'g_w_av' not in st.session_state: st.session_state['g_w_av'] = 0
@@ -273,7 +337,6 @@ elif menu == "학생 관리 (상담/성적)":
 
             st.markdown("##### 📝 주간 과제 & 점수")
             cc1, cc2, cc3 = st.columns(3)
-            # [수정] value=80 삭제 (위의 세션 초기화 코드가 대신함)
             st.number_input("수행도(%)", 0, 100, key="g_hw")
             st.number_input("주간 과제 점수", 0, 100, key="g_w_sc")
             st.number_input("주간과제 평균점수", 0, 100, key="g_w_av")
@@ -324,7 +387,6 @@ elif menu == "학생 관리 (상담/성적)":
                     if sel_p:
                         rep = my_w[my_w["시기"].isin(sel_p)].copy()
                         
-                        # 오답번호 콤마 처리
                         def format_wrong(x):
                             s = str(x).strip()
                             if not s or s == '0': return ""
@@ -343,9 +405,9 @@ elif menu == "학생 관리 (상담/성적)":
                               base.mark_line(color='gray', strokeDash=[5,5]).encode(y='주간평균'))
                         st.altair_chart(c1, use_container_width=True)
 
-                        if "성취도점수" in rep.columns and rep["성취도점수"].sum() > 0:
+                        if "성취도점수" in rep.columns and pd.to_numeric(rep["성취도점수"], errors='coerce').sum() > 0:
                             st.subheader("2️⃣ 성취도 평가 결과")
-                            ach_d = rep[rep["성취도점수"] > 0]
+                            ach_d = rep[pd.to_numeric(rep["성취도점수"], errors='coerce') > 0]
                             base_ach = alt.Chart(ach_d).encode(x=alt.X('시기', sort=None))
                             c2 = (base_ach.mark_line(color='#ff6c6c').encode(y=alt.Y('성취도점수', scale=y_fix)) + 
                                   base_ach.mark_point(color='#ff6c6c', size=100).encode(y='성취도점수') + 
@@ -364,4 +426,6 @@ elif menu == "학생 관리 (상담/성적)":
                     else:
                         st.warning("기간을 선택해주세요.")
                 else:
-                    st.info("데이터가 없습니다.")
+                    st.info("이 학생의 성적 데이터가 없습니다.")
+            else:
+                 st.info("성적 데이터(weekly 탭)가 비어있습니다.")
