@@ -209,7 +209,6 @@ def save_grades_callback(student, period):
     sorted_wrong = sort_numbers_string(wrong)
     sorted_a_wrong = sort_numbers_string(a_wrong)
     
-    # 15개 컬럼 순서 주의 (시트 헤더와 동일하게)
     row = [
         student, period, 
         hw_name, hw, w_sc, w_av, sorted_wrong, w_analysis, 
@@ -311,6 +310,7 @@ elif menu == "학생 관리 (상담/성적)":
                 wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
                 period = f"{mon} {wk}"
 
+                # 초기화
                 keys = ['g_hw_name', 'g_hw', 'g_w_sc', 'g_w_av', 'g_wrong', 'g_w_analysis', 
                         'g_raw_m', 'g_final_m', 
                         'g_ach_name', 'g_a_sc', 'g_a_av', 'g_a_wrong', 'g_a_analysis', 
@@ -397,7 +397,7 @@ elif menu == "학생 관리 (상담/성적)":
                 st.divider()
                 st.button("💾 전체 성적 및 분석 저장", type="primary", use_container_width=True, on_click=save_grades_callback, args=(selected_student, period))
 
-            # --- [탭 3] 리포트 (업그레이드: 주차별 상세 + 그래프) ---
+            # --- [탭 3] 리포트 (업그레이드: 주차별 개별 선택 + 그래프) ---
             elif selected_tab == "👨‍👩‍👧‍👦 리포트":
                 st.header(f"📑 {selected_student} 학습 리포트 마법사")
                 st.divider()
@@ -405,21 +405,12 @@ elif menu == "학생 관리 (상담/성적)":
                 if not df_w.empty:
                     my_w = df_w[df_w["이름"] == selected_student]
                     if not my_w.empty:
-                        # [기간 다중 선택]
+                        # 기간 다중 선택
                         periods = my_w["시기"].tolist()
-                        sel_p = st.multiselect("기간을 선택하세요 (여러 주차 선택 시 그래프와 함께 나옵니다):", periods, default=[periods[-1]] if periods else None)
+                        sel_p = st.multiselect("기간을 선택하세요 (여러 주차 선택 가능):", periods, default=[periods[-1]] if periods else None)
 
                         if sel_p:
-                            # 1. 보고 싶은 항목 선택 (공통 적용)
-                            st.subheader("✨ 보고 싶은 항목을 체크하세요 (뽀로롱)")
-                            col_chk1, col_chk2, col_chk3, col_chk4 = st.columns(4)
-                            show_score = col_chk1.checkbox("📊 점수표", value=True)
-                            show_hw_anal = col_chk2.checkbox("📝 주간과제 분석", value=True)
-                            show_att = col_chk3.checkbox("📢 학습 태도", value=True)
-                            show_exam_anal = col_chk4.checkbox("🏆 성취도 분석", value=True)
-                            st.divider()
-
-                            # 2. (여러 주차 선택 시) 그래프 먼저 보여주기
+                            # 1. 2개 이상 선택 시 그래프 표시
                             if len(sel_p) > 1:
                                 st.subheader(f"📊 {len(sel_p)}주간 성적 변화 추이")
                                 filtered_df = my_w[my_w["시기"].isin(sel_p)].copy()
@@ -433,10 +424,17 @@ elif menu == "학생 관리 (상담/성적)":
                                 st.altair_chart(c, use_container_width=True)
                                 st.divider()
 
-                            # 3. 선택한 각 주차별 상세 리포트 출력
+                            # 2. 각 주차별 상세 리포트 (항목 선택 기능 포함)
                             for p in sel_p:
                                 row_data = my_w[my_w["시기"] == p].iloc[0]
+                                
                                 st.markdown(f"### 🗓️ {p} 리포트")
+                                # [핵심 변경] 각 주차별로 고유한 체크박스 생성 (key값 분리)
+                                c1, c2, c3, c4 = st.columns(4)
+                                show_score = c1.checkbox(f"📊 점수표", value=True, key=f"score_{p}")
+                                show_hw = c2.checkbox(f"📝 주간과제", value=True, key=f"hw_{p}")
+                                show_att = c3.checkbox(f"📢 학습태도", value=True, key=f"att_{p}")
+                                show_exam = c4.checkbox(f"🏆 성취도", value=True, key=f"exam_{p}")
                                 
                                 if show_score:
                                     st.info("📊 **성적 요약**")
@@ -447,7 +445,7 @@ elif menu == "학생 관리 (상담/성적)":
                                     m2.metric("성취도 평가", f"{row_data.get('성취도점수',0)}점", f"평균 {row_data.get('성취도평균',0)}점")
                                     m3.metric("과제 수행도", f"{row_data.get('과제',0)}%")
 
-                                if show_hw_anal:
+                                if show_hw:
                                     st.success("📝 **주간 과제 분석**")
                                     st.write(row_data.get('주간분석', '내용 없음'))
 
@@ -455,7 +453,7 @@ elif menu == "학생 관리 (상담/성적)":
                                     st.warning("📢 **학습 태도 및 특이사항**")
                                     st.write(row_data.get('특이사항', '내용 없음'))
 
-                                if show_exam_anal:
+                                if show_exam:
                                     st.error("🏆 **성취도 평가 분석 및 총평**")
                                     st.markdown("**[문항 분석]**")
                                     st.write(row_data.get('성취도분석', '내용 없음'))
@@ -463,7 +461,7 @@ elif menu == "학생 관리 (상담/성적)":
                                     st.markdown("**[종합 총평]**")
                                     st.write(row_data.get('총평', '내용 없음'))
                                 
-                                st.markdown("---") # 주차별 구분선
+                                st.divider() # 주차별 구분선
                             
                             st.caption("💡 팁: 전체 내용을 드래그해서 복사하거나 캡처해서 리포트로 활용하세요!")
 
