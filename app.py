@@ -1,471 +1,349 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import requests
 import json
 import datetime
 import altair as alt
 import re
 from pypdf import PdfReader
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # ==========================================
-# 1. 페이지 설정
+# 1. 페이지 설정 및 구글 시트 연결
 # ==========================================
-st.set_page_config(page_title="강북청솔 학생 관리", layout="wide")
-st.title("👨‍🏫 김성만 선생님의 학생 관리 시스템")
+st.set_page_config(page_title="GoodSense Math (Web)", layout="wide")
+st.title("👨‍🏫 GoodSense Math 김성만 수학 연구소 (Web)")
+
+# [중요] 시크릿에서 키와 인증 정보 가져오기
+try:
+    # 1. API 키 (secrets.toml에 GENAI_API_KEY로 저장되어 있어야 함)
+    GEMINI_API_KEY = st.secrets["GENAI_API_KEY"]
+    
+    # 2. 구글 시트 인증 (secrets.toml에 gcp_service_account 섹션이 있어야 함)
+    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    
+    # 3. 구글 시트 열기 (시트 이름: "학생관리데이터")
+    # ※ 주의: 구글 드라이브에 있는 실제 파일명과 정확히 일치해야 합니다.
+    SHEET_NAME = "학생관리데이터" 
+    sh = client.open(SHEET_NAME) 
+
+except Exception as e:
+    st.error(f"❌ 설정 오류: Secrets 설정이나 구글 시트 연결을 확인해주세요.\n\n에러 내용: {e}")
+    st.stop()
 
 # ==========================================
-# 2. 구글 시트 및 API 설정
+# 2. 구글 시트 읽기/쓰기 함수 (gspread 사용)
 # ==========================================
-GOOGLE_SHEET_KEY = "1zJHY7baJgoxyFJ5cBduCPVEfQ-pBPZ8jvhZNaPpCLY4"
-
-@st.cache_resource
-def get_google_sheet_connection():
+def load_data_from_gsheet(worksheet_name):
     try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        return None
-
-@st.cache_data(ttl=60)
-def load_data_from_sheet(worksheet_name):
-    try:
-        client = get_google_sheet_connection()
-        if not client: return pd.DataFrame()
-        sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
-        data = sheet.get_all_values()
-        if len(data) < 2: return pd.DataFrame()
-        headers = data[0]
-        rows = data[1:]
-        df = pd.DataFrame(rows, columns=headers)
+        worksheet = sh.worksheet(worksheet_name)
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
         
-        numeric_cols = ['주간점수', '주간평균', '성취도점수', '성취도평균', '과제']
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = df[col].astype(str).str.replace(',', '')
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        # 숫자형 변환 (주간 시트)
+        if worksheet_name == 'weekly':
+            numeric_cols = ['주간점수', '주간평균', '성취도점수', '성취도평균', '과제']
+            for col in numeric_cols:
+                if col in df.columns:
+                    # 빈 문자열이나 에러가 날 경우 0으로 처리
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # 날짜/시기 문자열 변환
+        if '날짜' in df.columns: df['날짜'] = df['날짜'].astype(str)
+        if '시기' in df.columns: df['시기'] = df['시기'].astype(str)
         return df
     except Exception as e:
+        st.warning(f"데이터 로드 중: '{worksheet_name}' 시트를 찾을 수 없거나 비어있습니다.")
         return pd.DataFrame()
 
-def add_row_to_sheet(worksheet_name, row_data_list):
+def add_row_to_gsheet(worksheet_name, row_data_list):
     try:
-        client = get_google_sheet_connection()
-        if not client: return False
-        sheet = client.open_by_key(GOOGLE_SHEET_KEY).worksheet(worksheet_name)
-        sheet.append_row(row_data_list)
-        load_data_from_sheet.clear()
+        worksheet = sh.worksheet(worksheet_name)
+        # 리스트 내용을 문자열로 변환해서 저장 (안전성 확보)
+        safe_row = [str(x) if x is not None else "" for x in row_data_list]
+        worksheet.append_row(safe_row)
         return True
     except Exception as e:
         st.error(f"저장 실패: {e}")
         return False
 
 # ==========================================
-# 3. 유틸리티 함수
+# 3. 유틸리티 & AI (전문가 어조 적용됨)
 # ==========================================
 def sort_numbers_string(text):
     if not text: return ""
     numbers = re.findall(r'\d+', str(text))
     if not numbers: return text
-    sorted_nums = sorted([int(n) for n in numbers])
-    return ", ".join(map(str, sorted_nums))
-
-def clean_school_name(text, target_type="middle"):
-    if not text: return ""
-    text = text.strip()
-    root_name = re.sub(r'(고등학교|중학교|고등|중학|고|중)$', '', text)
-    if target_type == "middle":
-        return root_name + "중"
-    else:
-        return root_name + "고"
+    return ", ".join(map(str, sorted([int(n) for n in numbers])))
 
 def clean_class_name(text):
     if not text: return ""
     return text.upper().strip()
 
-# ==========================================
-# 4. AI 함수 (Gemini)
-# ==========================================
+def clean_school_name(text, target_type="middle"):
+    if not text: return ""
+    text = text.strip()
+    root_name = re.sub(r'(고등학교|중학교|고등|중학|고|중)$', '', text)
+    if target_type == "middle": return root_name + "중"
+    else: return root_name + "고"
+
 def refine_text_ai(raw_text, context_type, student_name):
     if not raw_text: return ""
     try:
-        api_key = st.secrets["GENAI_API_KEY"]
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}"
         headers = {'Content-Type': 'application/json'}
-        prompt_text = f"""
-        당신은 입시 수학 학원의 베테랑 선생님입니다. 
-        아래 메모는 '{student_name}' 학생에 대한 내용입니다.
-        학부모님께 전달할 수 있도록 '정중하고 전문적인 문체'로 다듬어주세요.
-        핵심 내용은 유지하되 문장을 매끄럽게 교정하세요.
-        [지침] 제목/인사말 제외, 본론만 작성, 학생 이름 주어 사용.
-        [원문]: {raw_text}
+        prompt = f"""
+        학생: {student_name}
+        내용: {raw_text}
+        문맥: {context_type}
+        
+        [학부모 전송용 메시지 작성 지침]
+        1. **금지어:** "믿고 맡겨주셔서 감사합니다", "책임지겠습니다" 같은 과도한 저자세나 모든 책임을 떠안는 표현 절대 금지.
+        2. **필수 표현:** - "학생의 부족한 부분을 **꼼꼼히 관리하겠습니다**."
+           - "**가정에서도 학생이 힘들어하거나 이상 동향이 보이면 바로 알려주십시오. 상담과 클리닉을 통해 지도하겠습니다.**"
+        3. **어조:** - 학생의 성장은 강사의 지도와 학생의 의지, 가정의 관심이 함께해야 함을 전제하는 차분하고 객관적인 전문가의 말투.
+           - 성적 향상에는 시간이 필요할 수 있음을(기다림의 여지) 내포할 것.
         """
-        data = {"contents": [{"parts": [{"text": prompt_text}]}]}
-        response = requests.post(url, headers=headers, data=json.dumps(data))
-        if response.status_code == 200:
-            return response.json()['candidates'][0]['content']['parts'][0]['text']
-        else:
-            return f"AI 에러: {response.status_code}"
-    except Exception as e:
-        return f"통신 에러: {e}"
+        data = {"contents": [{"parts": [{"text": prompt}]}]}
+        res = requests.post(url, headers=headers, data=json.dumps(data))
+        if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text']
+        else: return f"AI 에러: {res.status_code}"
+    except Exception as e: return f"통신 에러: {e}"
 
 def analyze_homework_ai(student_name, wrong_numbers, assignment_text, type_name="과제", target_audience="학부모 전송용"):
-    if not wrong_numbers or not assignment_text:
-        return "오답 번호와 PDF 내용이 필요합니다."
-    
+    if not wrong_numbers or not assignment_text: return "내용 부족"
     try:
-        api_key = st.secrets["GENAI_API_KEY"]
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}"
         headers = {'Content-Type': 'application/json'}
         
         if target_audience == "학부모 전송용":
-            prompt_text = f"""
-            당신은 신뢰감 있는 입시 수학 선생님입니다.
-            학생 이름: {student_name}
-            틀린 문제: {wrong_numbers}
-            분석 대상: {type_name}
+            prompt = f"""
+            학생: {student_name}, 오답: {wrong_numbers}, 유형: {type_name}
+            텍스트: {assignment_text[:15000]}
             
-            [과제/시험 텍스트 일부]:
-            {assignment_text[:15000]}
-            
-            [요청 사항]
-            **학부모님께 보낼 피드백 메시지**를 작성하세요.
-            1. **내용**:
-               - 학생이 틀린 문제의 수학적 개념(유형)을 분석해서 언급해주세요.
-               - 안심하실 수 있도록 "수업 시간 상세 해설, 밴드 영상 업로드, 1:1 질문 해결"을 통해 꼼꼼히 관리하겠다고 약속해주세요.
-            2. **[중요] 형식**:
-               - 번호(1., 2.)나 소제목을 절대 쓰지 마세요.
-               - 자연스러운 **편지글(줄글)** 형식으로 정중한 '해요체'를 사용하세요.
-               - 첫 인사는 생략하고 바로 본론으로 들어가세요.
+            [학부모 전송용 분석 보고서 작성 지침]
+            1. **인사말 생략:** 불필요한 감사 인사 없이 바로 "금주 {type_name} 분석 결과입니다."로 시작.
+            2. **분석:** 틀린 문제의 원인을 객관적 데이터(유형, 난이도)에 근거해 차갑고 정확하게 진단.
+            3. **대책 및 협조 요청:** - "수업 시간에 해당 유형을 집중적으로 다루며 **꼼꼼히 관리하겠습니다**."
+               - "**가정에서도 과제 수행 과정을 지켜봐 주시고, 어려워하는 점이 있다면 언제든 공유 부탁드립니다.**"
+            4. **마무리:** 감정적인 약속보다는 "지속적으로 관찰하며 지도하겠습니다" 정도로 담백하게 맺음.
             """
         else:
-            prompt_text = f"""
-            당신은 학생을 진심으로 아끼는 따뜻하고 친절한 수학 멘토 선생님입니다.
-            학생 이름: {student_name}
-            틀린 문제: {wrong_numbers}
-            분석 대상: {type_name}
-            
-            [과제/시험 텍스트 일부]:
-            {assignment_text[:15000]}
-            
-            [요청 사항]
-            **학생({student_name})에게 줄 따뜻하고 상세한 학습 조언**을 작성하세요.
-            1. **내용**:
-               - "이 문제는 A개념과 B개념이 섞여 있어서 까다로웠을 거야"처럼 공감하며 분석해주세요.
-               - "틀려도 괜찮아", "이 부분만 보완하면 돼" 같은 따뜻한 격려를 해주세요.
-               - "밴드나 카톡으로 언제든 질문해! 쌤이 다 받아줄게!"라는 말을 꼭 섞어주세요.
-            2. **[중요] 형식**:
-               - 번호(1., 2.)나 소제목을 절대 쓰지 마세요.
-               - 선생님이 옆에서 말해주는 듯한 **자연스러운 대화체(줄글)**로 써주세요.
+            prompt = f"""
+            학생: {student_name}, 오답: {wrong_numbers}, 유형: {type_name}
+            텍스트: {assignment_text[:15000]}
+            [학생 본인용 피드백] 따뜻하지만 단호한 선생님 말투. 1.유형 분석 2.노력 강조 3.질문 유도.
             """
-
-        data = {"contents": [{"parts": [{"text": prompt_text}]}]}
-        response = requests.post(url, headers=headers, data=json.dumps(data))
-        if response.status_code == 200:
-            return response.json()['candidates'][0]['content']['parts'][0]['text']
-        else:
-            return f"AI 에러: {response.status_code}"
-    except Exception as e:
-        return f"통신 에러: {e}"
+        data = {"contents": [{"parts": [{"text": prompt}]}]}
+        res = requests.post(url, headers=headers, data=json.dumps(data))
+        if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text']
+        else: return f"AI 에러: {res.status_code}"
+    except Exception as e: return f"통신 에러: {e}"
 
 # ==========================================
-# 5. 콜백 함수
+# 4. 메인 화면 로직 (리포트 UI 개선됨)
 # ==========================================
-def save_counseling_callback(student, date):
-    raw = st.session_state.get('c_raw_input', "")
-    final = st.session_state.get('c_final_input', "")
-    content_to_save = final.strip() if final.strip() else raw.strip()
-    
-    if content_to_save:
-        if add_row_to_sheet("counseling", [student, str(date), content_to_save]):
-            st.toast(f"✅ {student} 상담 내용 저장 완료!")
-            st.session_state['c_raw_input'] = ""
-            st.session_state['c_final_input'] = ""
-    else:
-        st.toast("⚠️ 내용이 없어 저장하지 않았습니다.")
+menu = st.sidebar.radio("메뉴", ["학생 관리", "신규 등록"], label_visibility="collapsed")
 
-def save_grades_callback(student, period):
-    hw_name = st.session_state.get('g_hw_name', "-")
-    ach_name = st.session_state.get('g_ach_name', "-")
-    hw = st.session_state.get('g_hw', 80)
-    w_sc = st.session_state.get('g_w_sc', 0)
-    w_av = st.session_state.get('g_w_av', 0)
-    wrong = st.session_state.get('g_wrong', "")
-    w_analysis = st.session_state.get('g_w_analysis', "")
-    raw_m = st.session_state.get('g_raw_m', "")
-    final_m = st.session_state.get('g_final_m', "")
-    save_m = final_m.strip() if final_m.strip() else raw_m.strip()
-    a_sc = st.session_state.get('g_a_sc', 0)
-    a_av = st.session_state.get('g_a_av', 0)
-    a_wrong = st.session_state.get('g_a_wrong', "")
-    a_analysis = st.session_state.get('g_a_analysis', "")
-    raw_r = st.session_state.get('g_raw_r', "")
-    final_r = st.session_state.get('g_final_r', "")
-    save_r = final_r.strip() if final_r.strip() else raw_r.strip()
-    sorted_wrong = sort_numbers_string(wrong)
-    sorted_a_wrong = sort_numbers_string(a_wrong)
-    
-    row = [
-        student, period, 
-        hw_name, hw, w_sc, w_av, sorted_wrong, w_analysis, 
-        save_m,
-        ach_name, a_sc, a_av, sorted_a_wrong, a_analysis, 
-        save_r
-    ]
-    
-    if add_row_to_sheet("weekly", row):
-        st.toast(f"✅ {student} 성적 및 모든 분석 저장 완료!")
-        keys = ['g_hw_name', 'g_hw', 'g_w_sc', 'g_w_av', 'g_wrong', 'g_w_analysis', 
-                'g_raw_m', 'g_final_m', 
-                'g_ach_name', 'g_a_sc', 'g_a_av', 'g_a_wrong', 'g_a_analysis', 
-                'g_raw_r', 'g_final_r', 
-                'g_pdf_text', 'g_ach_pdf_text']
-        for k in keys:
-            if k in st.session_state:
-                if k == 'g_hw': st.session_state[k] = 80
-                elif 'sc' in k or 'av' in k: st.session_state[k] = 0
-                else: st.session_state[k] = ""
-
-# ==========================================
-# 6. 메인 앱 화면
-# ==========================================
-menu = st.sidebar.radio("메뉴", ["학생 관리 (상담/성적)", "신규 학생 등록"])
-
-if menu == "신규 학생 등록":
-    st.header("📝 신규 학생 등록")
-    with st.form("new_student_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        name = col1.text_input("학생 이름")
-        ban = col2.text_input("반 (예: M1, S1)")
-        origin = st.text_input("출신 중학교")
-        target = st.text_input("배정 예정 고등학교")
+if menu == "신규 등록":
+    st.header("📝 신규 학생 등록 (Web)")
+    with st.form("new"):
+        c1, c2 = st.columns(2)
+        name = c1.text_input("이름")
+        ban = c2.text_input("반")
+        origin = st.text_input("출신중")
+        target = st.text_input("배정고")
         addr = st.text_input("거주지")
-        if st.form_submit_button("💾 학생 등록"):
+        if st.form_submit_button("저장"):
             if name:
-                clean_ban = clean_class_name(ban)
-                clean_origin = clean_school_name(origin, "middle")
-                clean_target = clean_school_name(target, "high")
-                if add_row_to_sheet("students", [name, clean_ban, clean_origin, clean_target, addr]):
-                    st.success(f"✅ {name} 등록 완료!")
+                if add_row_to_gsheet("students", [name, clean_class_name(ban), clean_school_name(origin), clean_school_name(target,'high'), addr]):
+                    st.success(f"{name} 등록 완료!")
+                    st.cache_data.clear() # 데이터 갱신
 
-elif menu == "학생 관리 (상담/성적)":
-    df_students = load_data_from_sheet("students")
-    
-    if df_students.empty:
-        st.warning("등록된 학생 데이터가 없습니다.")
-    else:
-        if '반' in df_students.columns:
-            ban_list = sorted(df_students['반'].unique().tolist())
-            selected_ban = st.sidebar.selectbox("📂 반 선택", ban_list)
-            filtered_students = df_students[df_students['반'] == selected_ban]
-            student_list = sorted(filtered_students['이름'].tolist())
-            selected_student = st.sidebar.selectbox("👤 학생 선택", student_list) if student_list else None
-        else:
-            selected_student = None
-
-        if selected_student:
-            rows = df_students[df_students["이름"] == selected_student]
-            if not rows.empty:
-                info = rows.iloc[0]
-                ban_txt = info['반'] if '반' in info else ''
-                st.sidebar.info(f"**{info['이름']} ({ban_txt})**\n\n🏫 {info['출신중']} ➡️ {info['배정고']}\n🏠 {info['거주지']}")
-
-            st.write("")
-            selected_tab = st.radio("작업 선택", ["🗣️ 상담 일지", "📊 성적 입력", "👨‍👩‍👧‍👦 리포트"], horizontal=True, label_visibility="collapsed")
+elif menu == "학생 관리":
+    df_std = load_data_from_gsheet("students")
+    if not df_std.empty:
+        if '반' in df_std.columns:
+            ban_list = sorted(df_std['반'].unique().tolist())
+            sel_ban = st.sidebar.selectbox("반", ban_list)
+            std_list = sorted(df_std[df_std['반']==sel_ban]['이름'].tolist())
+            sel_std = st.sidebar.selectbox("학생", std_list)
+        else: sel_std = None
+        
+        if sel_std:
+            st.sidebar.markdown(f"**{sel_std}** 선택됨")
+            tab = st.radio("기능", ["상담 일지", "성적 입력", "리포트"], horizontal=True, label_visibility="collapsed")
             st.divider()
-
-            # --- [탭 1] 상담 일지 ---
-            if selected_tab == "🗣️ 상담 일지":
-                st.subheader(f"{selected_student} 상담 기록")
-                df_c = load_data_from_sheet("counseling")
-                with st.expander("📂 이전 상담 내역"):
+            
+            if tab == "상담 일지":
+                df_c = load_data_from_gsheet("counseling")
+                with st.expander("기록 보기"):
                     if not df_c.empty:
-                        logs = df_c[df_c["이름"] == selected_student]
-                        if '날짜' in logs.columns: logs = logs.sort_values(by='날짜', ascending=False)
-                        for _, r in logs.iterrows():
-                            st.markdown(f"**🗓️ {r['날짜']}**")
-                            st.info(r['내용'])
-                c_date = st.date_input("날짜", datetime.date.today())
-                if 'c_raw_input' not in st.session_state: st.session_state['c_raw_input'] = ""
-                raw_c = st.text_area("1. 상담 메모", height=80, key="c_raw_input")
-                if st.button("✨ AI 변환", key="btn_c_ai"):
-                    with st.spinner("변환 중..."):
-                        ai_result = refine_text_ai(raw_c, "학부모 상담 일지", selected_student)
-                        st.session_state['c_final_input'] = ai_result 
-                        st.rerun()
-                if 'c_final_input' not in st.session_state: st.session_state['c_final_input'] = ""
-                final_c = st.text_area("2. 최종 내용", height=150, key="c_final_input")
-                st.button("💾 상담 내용 저장", type="primary", on_click=save_counseling_callback, args=(selected_student, c_date))
-
-            # --- [탭 2] 성적 입력 ---
-            elif selected_tab == "📊 성적 입력":
-                st.subheader("📊 성적 데이터 입력")
+                        logs = df_c[df_c['이름']==sel_std].sort_values('날짜', ascending=False)
+                        for _, r in logs.iterrows(): st.info(f"[{r['날짜']}] {r['내용']}")
+                d = st.date_input("날짜", datetime.date.today())
+                raw = st.text_area("메모", key="c_raw_input")
+                if st.button("AI 변환"):
+                    st.session_state['c_final_input'] = refine_text_ai(raw, "상담", sel_std)
+                    st.rerun()
+                st.text_area("최종", key="c_final_input")
                 
+                # 저장 콜백 함수 (인자 전달 방식 수정)
+                def save_counseling():
+                    content = st.session_state['c_final_input'] if st.session_state['c_final_input'] else st.session_state['c_raw_input']
+                    if content:
+                        add_row_to_gsheet("counseling", [sel_std, str(d), content])
+                        st.toast("저장 완료!")
+                        st.session_state['c_raw_input'] = ""
+                        st.session_state['c_final_input'] = ""
+                        st.cache_data.clear()
+
+                st.button("저장", on_click=save_counseling)
+
+            elif tab == "성적 입력":
                 c1, c2 = st.columns(2)
-                mon = c1.selectbox("월", [f"{i}월" for i in range(1, 13)])
-                wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
-                period = f"{mon} {wk}"
-
-                # 초기화
+                m = c1.selectbox("월", [f"{i}월" for i in range(1,13)])
+                w = c2.selectbox("주", [f"{i}주차" for i in range(1,6)])
+                period = f"{m} {w}"
+                
                 keys = ['g_hw_name', 'g_hw', 'g_w_sc', 'g_w_av', 'g_wrong', 'g_w_analysis', 
-                        'g_raw_m', 'g_final_m', 
-                        'g_ach_name', 'g_a_sc', 'g_a_av', 'g_a_wrong', 'g_a_analysis', 
-                        'g_raw_r', 'g_final_r', 
-                        'g_pdf_text', 'g_ach_pdf_text']
+                        'g_raw_m', 'g_final_m', 'g_ach_name', 'g_a_sc', 'g_a_av', 'g_a_wrong', 
+                        'g_a_analysis', 'g_raw_r', 'g_final_r', 'g_pdf_text', 'g_ach_pdf_text']
                 for k in keys:
-                    if k not in st.session_state:
-                         st.session_state[k] = 80 if k == 'g_hw' else (0 if 'sc' in k or 'av' in k else "")
+                    if k not in st.session_state: st.session_state[k] = 80 if k == 'g_hw' else (0 if 'sc' in k or 'av' in k else "")
 
-                # 1. 주간 과제
-                st.markdown("##### 📝 주간 과제 & 점수")
-                st.text_input("📚 과제장 이름", placeholder="예: 쎈 수1, 마플시너지", key="g_hw_name")
+                st.subheader("📝 주간 과제")
+                st.text_input("과제명", key="g_hw_name")
                 cc1, cc2, cc3 = st.columns(3)
-                st.number_input("수행도(%)", 0, 100, key="g_hw")
-                st.number_input("주간 과제 점수", 0, 100, key="g_w_sc")
-                st.number_input("주간과제 평균점수", 0, 100, key="g_w_av")
-                st.text_input("주간 과제 오답 번호", placeholder="예: 3 1 2", key="g_wrong")
+                st.number_input("수행도", 0, 100, key="g_hw")
+                st.number_input("점수", key="g_w_sc")
+                st.number_input("평균", key="g_w_av")
+                st.text_input("오답", key="g_wrong")
+                with st.expander("PDF 분석"):
+                    up = st.file_uploader("과제 PDF", type=["pdf"], key="f1")
+                    if up: 
+                        try: st.session_state['g_pdf_text'] = "".join([p.extract_text() for p in PdfReader(up).pages])
+                        except: pass
+                    tgt = st.radio("대상", ["학부모 전송용", "학생 배부용"], horizontal=True, key="t1")
+                    if st.button("분석 실행", key="b1"):
+                        st.session_state['g_w_analysis'] = analyze_homework_ai(sel_std, st.session_state['g_wrong'], st.session_state['g_pdf_text'], "주간과제", tgt)
+                        st.rerun()
+                st.text_area("분석결과", key="g_w_analysis")
+                st.divider()
+                st.subheader("📢 태도")
+                rm = st.text_area("메모", key="g_raw_m")
+                if st.button("다듬기", key="b2"):
+                    st.session_state['g_final_m'] = refine_text_ai(rm, "태도", sel_std)
+                    st.rerun()
+                st.text_area("최종", key="g_final_m")
+                st.divider()
+                st.subheader("🏆 성취도")
+                st.text_input("시험명", key="g_ach_name")
+                c4, c5 = st.columns(2)
+                st.number_input("점수", key="g_a_sc")
+                st.number_input("평균", key="g_a_av")
+                st.text_input("오답", key="g_a_wrong")
+                with st.expander("시험지 분석"):
+                    up2 = st.file_uploader("시험지 PDF", type=["pdf"], key="f2")
+                    if up2:
+                        try: st.session_state['g_ach_pdf_text'] = "".join([p.extract_text() for p in PdfReader(up2).pages])
+                        except: pass
+                    tgt2 = st.radio("대상", ["학부모 전송용", "학생 배부용"], horizontal=True, key="t2")
+                    if st.button("분석 실행", key="b3"):
+                        st.session_state['g_a_analysis'] = analyze_homework_ai(sel_std, st.session_state['g_a_wrong'], st.session_state['g_ach_pdf_text'], "성취도", tgt2)
+                        st.rerun()
+                st.text_area("분석결과", key="g_a_analysis")
+                st.subheader("📝 총평")
+                rr = st.text_area("메모", key="g_raw_r")
+                if st.button("다듬기", key="b4"):
+                    st.session_state['g_final_r'] = refine_text_ai(rr, "총평", sel_std)
+                    st.rerun()
+                st.text_area("최종", key="g_final_r")
                 
-                with st.expander("✨ [AI] 주간과제 PDF 분석", expanded=False):
-                    uploaded_file = st.file_uploader("📄 과제 PDF 업로드", type=["pdf"], key="file_homework")
-                    if uploaded_file is not None:
-                        try:
-                            reader = PdfReader(uploaded_file)
-                            text_content = "".join([page.extract_text() for page in reader.pages])
-                            st.session_state['g_pdf_text'] = text_content
-                            st.success(f"PDF 로드 성공! ({len(reader.pages)}페이지)")
-                        except: st.error("PDF 읽기 실패")
+                # 저장 콜백 (구글 시트용)
+                def save_grades():
+                    # 값 가져오기
+                    hw_name = st.session_state.get('g_hw_name', "-")
+                    ach_name = st.session_state.get('g_ach_name', "-")
+                    hw = st.session_state.get('g_hw', 80)
+                    w_sc = st.session_state.get('g_w_sc', 0)
+                    w_av = st.session_state.get('g_w_av', 0)
+                    wrong = st.session_state.get('g_wrong', "")
+                    w_analysis = st.session_state.get('g_w_analysis', "")
+                    raw_m = st.session_state.get('g_raw_m', "")
+                    final_m = st.session_state.get('g_final_m', "")
+                    save_m = final_m.strip() if final_m.strip() else raw_m.strip()
+                    a_sc = st.session_state.get('g_a_sc', 0)
+                    a_av = st.session_state.get('g_a_av', 0)
+                    a_wrong = st.session_state.get('g_a_wrong', "")
+                    a_analysis = st.session_state.get('g_a_analysis', "")
+                    raw_r = st.session_state.get('g_raw_r', "")
+                    final_r = st.session_state.get('g_final_r', "")
+                    save_r = final_r.strip() if final_r.strip() else raw_r.strip()
                     
-                    target_h = st.radio("분석 대상:", ["학부모 전송용", "학생 배부용"], horizontal=True, key="target_h")
-                    if st.button("🚀 주간과제 분석 실행"):
-                        with st.spinner(f"{target_h}으로 분석 중..."):
-                            analysis_msg = analyze_homework_ai(selected_student, st.session_state['g_wrong'], st.session_state['g_pdf_text'], "주간과제", target_h)
-                            st.session_state['g_w_analysis'] = analysis_msg
-                            st.rerun()
+                    row = [sel_std, period, hw_name, hw, w_sc, w_av, sort_numbers_string(wrong), w_analysis, 
+                           save_m, ach_name, a_sc, a_av, sort_numbers_string(a_wrong), a_analysis, save_r]
+                    
+                    if add_row_to_gsheet("weekly", row):
+                        st.toast("구글 시트 저장 완료!")
+                        # 초기화
+                        for k in ['g_hw_name','g_ach_name','g_wrong','g_w_analysis','g_raw_m','g_final_m','g_a_wrong','g_a_analysis','g_raw_r','g_final_r']:
+                            st.session_state[k] = ""
+                        st.session_state['g_hw'] = 80
+                        st.session_state['g_w_sc'] = 0
+                        st.session_state['g_w_av'] = 0
+                        st.session_state['g_a_sc'] = 0
+                        st.session_state['g_a_av'] = 0
+                        st.cache_data.clear()
 
-                st.text_area("주간 과제 분석 결과 (자동 생성)", height=150, key="g_w_analysis")
-                st.divider()
+                st.button("💾 저장하기", type="primary", on_click=save_grades)
 
-                # 2. 태도
-                st.markdown("##### 📢 학습 태도 및 특이사항")
-                raw_m = st.text_area("태도 메모", height=80, key="g_raw_m")
-                if st.button("✨ 문체 교정", key="btn_m_ai"):
-                    with st.spinner("변환 중..."):
-                        res = refine_text_ai(raw_m, "학습 태도", selected_student)
-                        st.session_state['g_final_m'] = res
-                        st.rerun()
-                st.text_area("최종 특이사항", height=80, key="g_final_m")
-                st.divider()
-
-                # 3. 성취도
-                st.markdown("##### 🏆 성취도 평가")
-                st.text_input("📄 시험지 이름", placeholder="예: 3월 월례고사", key="g_ach_name")
-                cc4, cc5 = st.columns(2)
-                st.number_input("성취도 평가 점수", 0, 100, key="g_a_sc")
-                st.number_input("성취도 평가 점수 평균", 0, 100, key="g_a_av")
-                st.text_input("성취도평가 오답번호", placeholder="예: 21 29 30", key="g_a_wrong")
-                
-                with st.expander("✨ [AI] 성취도 시험지 분석", expanded=False):
-                    ach_file = st.file_uploader("📄 시험지 PDF 업로드", type=["pdf"], key="file_achievement")
-                    if ach_file is not None:
-                        try:
-                            reader_ach = PdfReader(ach_file)
-                            ach_content = "".join([page.extract_text() for page in reader_ach.pages])
-                            st.session_state['g_ach_pdf_text'] = ach_content
-                            st.success(f"시험지 로드 성공! ({len(reader_ach.pages)}페이지)")
-                        except: st.error("PDF 읽기 실패")
-
-                    target_a = st.radio("분석 대상:", ["학부모 전송용", "학생 배부용"], horizontal=True, key="target_a")
-                    if st.button("🚀 성취도 분석 실행"):
-                        with st.spinner(f"{target_a}으로 분석 중..."):
-                            analysis_msg = analyze_homework_ai(selected_student, st.session_state['g_a_wrong'], st.session_state['g_ach_pdf_text'], "성취도평가", target_a)
-                            st.session_state['g_a_analysis'] = analysis_msg
-                            st.rerun()
-
-                st.text_area("성취도 분석 결과 (자동 생성)", height=150, key="g_a_analysis")
-                st.markdown("##### 📝 성취도 총평")
-                raw_r = st.text_area("총평 메모", height=80, key="g_raw_r")
-                if st.button("✨ 문체 교정 (총평)", key="btn_r_ai"):
-                    with st.spinner("변환 중..."):
-                        res = refine_text_ai(raw_r, "총평", selected_student)
-                        st.session_state['g_final_r'] = res
-                        st.rerun()
-                st.text_area("최종 총평", height=80, key="g_final_r")
-                st.divider()
-                st.button("💾 전체 성적 및 분석 저장", type="primary", use_container_width=True, on_click=save_grades_callback, args=(selected_student, period))
-
-            # --- [탭 3] 리포트 (업그레이드: 주차별 개별 선택 + 그래프) ---
-            elif selected_tab == "👨‍👩‍👧‍👦 리포트":
-                st.header(f"📑 {selected_student} 학습 리포트 마법사")
-                st.divider()
-                df_w = load_data_from_sheet("weekly")
+            elif tab == "리포트":
+                df_w = load_data_from_gsheet("weekly")
                 if not df_w.empty:
-                    my_w = df_w[df_w["이름"] == selected_student]
+                    my_w = df_w[df_w['이름']==sel_std]
                     if not my_w.empty:
-                        # 기간 다중 선택
-                        periods = my_w["시기"].tolist()
-                        sel_p = st.multiselect("기간을 선택하세요 (여러 주차 선택 가능):", periods, default=[periods[-1]] if periods else None)
+                        pers = my_w['시기'].tolist()
+                        
+                        # [상단 배치] 리포트 설정
+                        st.subheader("🖨️ 리포트 출력 설정")
+                        sel_p = st.multiselect("출력할 주차(기간)를 선택하세요", pers, default=[pers[-1]])
+                        with st.expander("✅ 표시할 항목 선택 (클릭하여 열기/닫기)", expanded=False):
+                            st.caption("아래 체크박스를 해제하면 리포트에서 해당 내용이 사라집니다.")
+                            c_opt1, c_opt2, c_opt3, c_opt4 = st.columns(4)
+                            show_score = c_opt1.checkbox("점수/수행도", True)
+                            show_weekly = c_opt2.checkbox("주간분석", True)
+                            show_attitude = c_opt3.checkbox("태도/특이사항", True)
+                            show_achieve = c_opt4.checkbox("성취도/총평", True)
+                        st.divider() 
 
                         if sel_p:
-                            # 1. 2개 이상 선택 시 그래프 표시
                             if len(sel_p) > 1:
-                                st.subheader(f"📊 {len(sel_p)}주간 성적 변화 추이")
-                                filtered_df = my_w[my_w["시기"].isin(sel_p)].copy()
-                                chart_data = filtered_df[["시기", "주간점수", "성취도점수"]].melt("시기", var_name="종류", value_name="점수")
-                                c = alt.Chart(chart_data).mark_line(point=True).encode(
-                                    x=alt.X('시기', sort=None),
-                                    y=alt.Y('점수', scale=alt.Scale(domain=[0, 100])),
-                                    color='종류',
-                                    tooltip=['시기', '종류', '점수']
-                                ).interactive()
-                                st.altair_chart(c, use_container_width=True)
-                                st.divider()
+                                st.subheader("📊 성적 추이")
+                                chart_data = my_w[my_w['시기'].isin(sel_p)][['시기','주간점수','성취도점수']].melt('시기', var_name='종류', value_name='점수')
+                                chart = alt.Chart(chart_data).mark_line(point=True).encode(x=alt.X('시기', sort=None), y=alt.Y('점수', scale=alt.Scale(domain=[0,100])), color='종류').interactive()
+                                st.altair_chart(chart, use_container_width=True)
 
-                            # 2. 각 주차별 상세 리포트 (항목 선택 기능 포함)
                             for p in sel_p:
-                                row_data = my_w[my_w["시기"] == p].iloc[0]
-                                
+                                r = my_w[my_w['시기']==p].iloc[0]
                                 st.markdown(f"### 🗓️ {p} 리포트")
-                                # [핵심 변경] 각 주차별로 고유한 체크박스 생성 (key값 분리)
-                                c1, c2, c3, c4 = st.columns(4)
-                                show_score = c1.checkbox(f"📊 점수표", value=True, key=f"score_{p}")
-                                show_hw = c2.checkbox(f"📝 주간과제", value=True, key=f"hw_{p}")
-                                show_att = c3.checkbox(f"📢 학습태도", value=True, key=f"att_{p}")
-                                show_exam = c4.checkbox(f"🏆 성취도", value=True, key=f"exam_{p}")
-                                
                                 if show_score:
-                                    st.info("📊 **성적 요약**")
-                                    st.write(f"📘 **과제명:** {row_data.get('과제명', '-')}")
-                                    st.write(f"📄 **시험명:** {row_data.get('시험명', '-')}")
-                                    m1, m2, m3 = st.columns(3)
-                                    m1.metric("주간 과제", f"{row_data.get('주간점수',0)}점", f"평균 {row_data.get('주간평균',0)}점")
-                                    m2.metric("성취도 평가", f"{row_data.get('성취도점수',0)}점", f"평균 {row_data.get('성취도평균',0)}점")
-                                    m3.metric("과제 수행도", f"{row_data.get('과제',0)}%")
-
-                                if show_hw:
-                                    st.success("📝 **주간 과제 분석**")
-                                    st.write(row_data.get('주간분석', '내용 없음'))
-
-                                if show_att:
-                                    st.warning("📢 **학습 태도 및 특이사항**")
-                                    st.write(row_data.get('특이사항', '내용 없음'))
-
-                                if show_exam:
-                                    st.error("🏆 **성취도 평가 분석 및 총평**")
-                                    st.markdown("**[문항 분석]**")
-                                    st.write(row_data.get('성취도분석', '내용 없음'))
-                                    st.markdown("---")
-                                    st.markdown("**[종합 총평]**")
-                                    st.write(row_data.get('총평', '내용 없음'))
-                                
-                                st.divider() # 주차별 구분선
-                            
-                            st.caption("💡 팁: 전체 내용을 드래그해서 복사하거나 캡처해서 리포트로 활용하세요!")
-
-                        else:
-                            st.info("기간을 선택해주세요.")
-                    else: st.info("데이터가 없습니다.")
-                else: st.info("데이터가 없습니다.")
+                                    st.info(f"**{r.get('과제명','-')} / {r.get('시험명','-')}**")
+                                    c1, c2, c3 = st.columns(3)
+                                    c1.metric("주간", f"{r.get('주간점수',0)}", f"Avg {r.get('주간평균',0)}")
+                                    c2.metric("성취도", f"{r.get('성취도점수',0)}", f"Avg {r.get('성취도평균',0)}")
+                                    c3.metric("수행도", f"{r.get('과제',0)}%")
+                                if show_weekly and r.get('주간분석'): st.success(f"**주간 과제 분석**\n\n{r.get('주간분석','')}")
+                                if show_attitude and r.get('특이사항'): st.warning(f"**학습 태도**\n\n{r.get('특이사항','')}")
+                                if show_achieve:
+                                    content = ""
+                                    if r.get('성취도분석'): content += f"**성취도 분석**\n{r.get('성취도분석','')}\n\n"
+                                    if r.get('총평'): content += f"---\n**총평**\n{r.get('총평','')}"
+                                    if content: st.error(content)
+                                st.divider()
+                    else: st.info("데이터 없음")
+                else: st.info("데이터 없음")
