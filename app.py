@@ -42,7 +42,6 @@ def load_data_from_sheet(worksheet_name):
         rows = data[1:]
         df = pd.DataFrame(rows, columns=headers)
         
-        # 숫자형 데이터 처리
         numeric_cols = ['주간점수', '주간평균', '성취도점수', '성취도평균', '과제']
         for col in numeric_cols:
             if col in df.columns:
@@ -88,7 +87,7 @@ def clean_class_name(text):
     return text.upper().strip()
 
 # ==========================================
-# 4. AI 함수
+# 4. AI 함수 (Gemini)
 # ==========================================
 def refine_text_ai(raw_text, context_type, student_name):
     if not raw_text: return ""
@@ -104,6 +103,46 @@ def refine_text_ai(raw_text, context_type, student_name):
         [지침] 제목/인사말 제외, 본론만 작성, 학생 이름 주어 사용.
         [원문]: {raw_text}
         """
+        data = {"contents": [{"parts": [{"text": prompt_text}]}]}
+        response = requests.post(url, headers=headers, data=json.dumps(data))
+        if response.status_code == 200:
+            return response.json()['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return f"AI 에러: {response.status_code}"
+    except Exception as e:
+        return f"통신 에러: {e}"
+
+# [신규 기능] 과제 오답 분석 및 대책 생성 함수
+def analyze_homework_ai(student_name, wrong_numbers, assignment_text):
+    if not wrong_numbers or not assignment_text:
+        return "오답 번호와 과제 텍스트를 모두 입력해주세요."
+    
+    try:
+        api_key = st.secrets["GENAI_API_KEY"]
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
+        headers = {'Content-Type': 'application/json'}
+        
+        prompt_text = f"""
+        당신은 입시 수학 학원 선생님입니다.
+        학생 이름: {student_name}
+        학생이 틀린 문제 번호: {wrong_numbers}
+        
+        아래는 이번 과제(시험)의 전체 텍스트입니다:
+        ---
+        {assignment_text}
+        ---
+
+        [요청 사항]
+        학부모님께 보낼 문자를 작성해주세요.
+        1. 제공된 텍스트에서 학생이 틀린 번호의 문제 내용을 찾아서, 어떤 유형/개념의 문제인지 간략히 분석해주세요. (수식이 깨져있다면 문맥으로 유추하세요)
+        2. 대책으로는 반드시 다음 3가지를 포함하여 안심시켜주세요:
+           - 해당 문항에 대한 수업 시간 내 상세 해설 진행
+           - 밴드(Band)에 해설 영상 업로드 제공
+           - 카카오톡 또는 대면을 통한 개별 1:1 질문 해결 및 관리
+        3. 문체는 정중하고 신뢰감 있게(해요체), 너무 길지 않게 작성해주세요.
+        4. 첫 인사는 생략하고 본론부터 작성해주세요.
+        """
+        
         data = {"contents": [{"parts": [{"text": prompt_text}]}]}
         response = requests.post(url, headers=headers, data=json.dumps(data))
         if response.status_code == 200:
@@ -154,7 +193,7 @@ def save_grades_callback(student, period):
     
     if add_row_to_sheet("weekly", row):
         st.toast(f"✅ {student} 성적 저장 완료! 입력창을 비웠습니다.")
-        # 초기화
+        # 모든 입력창 초기화
         st.session_state['g_hw'] = 80
         st.session_state['g_w_sc'] = 0
         st.session_state['g_w_av'] = 0
@@ -166,6 +205,8 @@ def save_grades_callback(student, period):
         st.session_state['g_a_wrong'] = ""
         st.session_state['g_raw_r'] = ""
         st.session_state['g_final_r'] = ""
+        # [추가] 과제 텍스트도 초기화
+        if 'g_assignment_text' in st.session_state: st.session_state['g_assignment_text'] = ""
 
 # ==========================================
 # 6. 메인 앱 화면
@@ -199,20 +240,12 @@ elif menu == "학생 관리 (상담/성적)":
     if df_students.empty:
         st.warning("등록된 학생 데이터가 없습니다. 먼저 학생을 등록해주세요.")
     else:
-        # ---------------------------------------------------------
-        # [반 선택] -> [학생 선택 (가나다순)] 로직
-        # ---------------------------------------------------------
-        
+        # 반/학생 선택 로직
         if '반' in df_students.columns:
-            # 1. 반 목록: 가나다순 정렬
             ban_list = sorted(df_students['반'].unique().tolist())
             selected_ban = st.sidebar.selectbox("📂 반 선택", ban_list)
             
-            # 2. 선택된 반에 해당하는 학생들만 필터링
             filtered_students = df_students[df_students['반'] == selected_ban]
-            
-            # 3. 학생 선택: 이름 가나다순 정렬 (sorted 사용)
-            # 여기가 수정된 부분입니다!
             student_list = sorted(filtered_students['이름'].tolist())
             
             if student_list:
@@ -223,8 +256,6 @@ elif menu == "학생 관리 (상담/성적)":
         else:
             st.error("데이터 시트에 '반' 컬럼이 없습니다.")
             selected_student = None
-
-        # ---------------------------------------------------------
 
         if selected_student:
             rows = df_students[df_students["이름"] == selected_student]
@@ -264,10 +295,9 @@ elif menu == "학생 관리 (상담/성적)":
                         st.rerun()
                 
                 final_c = st.text_area("2. 최종 내용", height=150, key="c_final_input")
-                
                 st.button("💾 상담 내용 저장", type="primary", on_click=save_counseling_callback, args=(selected_student, c_date))
 
-            # --- [탭 2] 성적 입력 ---
+            # --- [탭 2] 성적 입력 (AI 분석 기능 추가) ---
             elif selected_tab == "📊 성적 입력":
                 st.subheader("📊 성적 데이터 입력")
                 
@@ -276,6 +306,7 @@ elif menu == "학생 관리 (상담/성적)":
                 wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
                 period = f"{mon} {wk}"
 
+                # 세션 초기화
                 if 'g_hw' not in st.session_state: st.session_state['g_hw'] = 80
                 if 'g_w_sc' not in st.session_state: st.session_state['g_w_sc'] = 0
                 if 'g_w_av' not in st.session_state: st.session_state['g_w_av'] = 0
@@ -287,6 +318,8 @@ elif menu == "학생 관리 (상담/성적)":
                 if 'g_a_wrong' not in st.session_state: st.session_state['g_a_wrong'] = ""
                 if 'g_raw_r' not in st.session_state: st.session_state['g_raw_r'] = ""
                 if 'g_final_r' not in st.session_state: st.session_state['g_final_r'] = ""
+                # [신규] 과제 텍스트 저장용 변수
+                if 'g_assignment_text' not in st.session_state: st.session_state['g_assignment_text'] = ""
 
                 st.markdown("##### 📝 주간 과제 & 점수")
                 cc1, cc2, cc3 = st.columns(3)
@@ -295,16 +328,41 @@ elif menu == "학생 관리 (상담/성적)":
                 st.number_input("주간과제 평균점수", 0, 100, key="g_w_av")
                 st.text_input("주간 과제 오답 번호", placeholder="예: 3 1 2", key="g_wrong")
                 
+                # -----------------------------------------------------
+                # [NEW] 오답 문항 자동 분석 섹션
+                # -----------------------------------------------------
+                with st.expander("✨ [AI] 과제 오답 분석 및 학부모 전송 문구 생성", expanded=True):
+                    st.caption("PDF 과제 파일에서 텍스트를 복사(Ctrl+A, Ctrl+C)해서 아래에 붙여넣으세요.")
+                    assignment_text = st.text_area("과제 전체 텍스트 붙여넣기", height=100, key="g_assignment_text")
+                    
+                    if st.button("🚀 오답 분석 및 대책 생성", type="secondary"):
+                        wrong_nums = st.session_state.get('g_wrong', "")
+                        if not wrong_nums.strip():
+                            st.error("먼저 '주간 과제 오답 번호'를 입력해주세요!")
+                        elif not assignment_text.strip():
+                            st.error("과제 텍스트를 붙여넣어 주세요!")
+                        else:
+                            with st.spinner("Gemini가 문제를 분석하고 대책을 수립 중입니다..."):
+                                analysis_msg = analyze_homework_ai(selected_student, wrong_nums, assignment_text)
+                                # 결과는 '특이사항 메모'에 자동 입력
+                                st.session_state['g_raw_m'] = analysis_msg
+                                st.rerun()
+                # -----------------------------------------------------
+
                 st.divider()
 
                 st.markdown("##### 📢 학습 태도 및 특이사항")
-                raw_m = st.text_area("특이사항 메모", height=70, key="g_raw_m")
-                if st.button("✨ 특이사항 AI 변환", key="btn_m_ai"):
+                # AI가 생성한 분석 내용이 여기로 들어옵니다
+                raw_m = st.text_area("특이사항 메모 (자동 생성됨)", height=150, key="g_raw_m")
+                
+                # 기존 단순 문체 교정 버튼 (필요시 사용)
+                if st.button("✨ 단순 문체 교정 (입력한 내용만 다듬기)", key="btn_m_ai"):
                     with st.spinner("변환 중..."):
                         res = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
                         st.session_state['g_final_m'] = res
                         st.rerun()
-                st.text_area("최종 특이사항", height=80, key="g_final_m")
+                
+                st.text_area("최종 특이사항 (저장될 내용)", height=100, key="g_final_m")
                 
                 st.divider()
 
