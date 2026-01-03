@@ -3,4 +3,4 @@ pandas
 gspread
 oauth2client
 altair
-pypdf  <-- 이렇게 한 줄 추가!
+pypdf  
