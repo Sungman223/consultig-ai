@@ -2,5 +2,5 @@ streamlit
 pandas
 gspread
 oauth2client
-requests
 altair
+pypdf  <-- 이렇게 한 줄 추가!
