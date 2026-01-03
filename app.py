@@ -43,7 +43,7 @@ def load_data_from_sheet(worksheet_name):
         rows = data[1:]
         df = pd.DataFrame(rows, columns=headers)
         
-        # 숫자형 변환 (에러 방지)
+        # 숫자형 변환
         numeric_cols = ['주간점수', '주간평균', '성취도점수', '성취도평균', '과제']
         for col in numeric_cols:
             if col in df.columns:
@@ -123,6 +123,10 @@ def analyze_homework_ai(student_name, wrong_numbers, assignment_text, type_name=
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
         headers = {'Content-Type': 'application/json'}
         
+        # ------------------------------------------------------------------
+        # [수정됨] 번호(1. 2. 3.)와 소제목을 절대 쓰지 않도록 강력하게 지시
+        # ------------------------------------------------------------------
+        
         if target_audience == "학부모 전송용":
             prompt_text = f"""
             당신은 신뢰감 있는 입시 수학 선생님입니다.
@@ -135,13 +139,16 @@ def analyze_homework_ai(student_name, wrong_numbers, assignment_text, type_name=
             
             [요청 사항]
             **학부모님께 보낼 피드백 메시지**를 작성하세요.
-            1. 학생이 틀린 문제들이 어떤 수학적 개념(유형)인지 전문가처럼 간략히 분석해주세요.
-            2. 부모님이 안심할 수 있도록 아래 3가지 대책을 포함해주세요:
-               - 수업 시간 내 해당 문항 상세 해설 진행
-               - 밴드(Band)에 해설 영상 업로드 완료
-               - 카카오톡 또는 대면을 통한 1:1 개별 질문 해결
-            3. 문체: 정중하고 예의 바른 '해요체' (너무 딱딱하지 않게).
-            4. 구성: 인사 생략, 분석 내용 -> 관리 계획 순서.
+            
+            1. **내용**:
+               - 학생이 틀린 문제의 수학적 개념(유형)을 분석해서 언급해주세요.
+               - 안심하실 수 있도록 "수업 시간 상세 해설, 밴드 영상 업로드, 1:1 질문 해결"을 통해 꼼꼼히 관리하겠다고 약속해주세요.
+            
+            2. **[매우 중요] 형식 및 문체**:
+               - **절대로 '1. 분석', '2. 대책' 같은 번호나 소제목을 붙이지 마세요.** AI가 쓴 티가 납니다.
+               - 처음부터 끝까지 자연스럽게 이어지는 **편지글(줄글)** 형식으로 써주세요.
+               - 정중하고 예의 바른 '해요체'를 사용하세요.
+               - 첫 인사는 생략하고 바로 본론("이번 과제에서 ~는...")으로 들어가세요.
             """
         else:
             prompt_text = f"""
@@ -154,11 +161,18 @@ def analyze_homework_ai(student_name, wrong_numbers, assignment_text, type_name=
             {assignment_text[:15000]}
             
             [요청 사항]
-            **학생({student_name})에게 줄 따뜻하고 상세한 학습 가이드**를 작성하세요.
-            1. **상세한 유형 분석**: "이 문제는 A개념과 B개념이 섞여 있어서 까다로웠을 거야"라고 학생 입장에서 공감하며 핵심 원리를 설명해주세요.
-            2. **따뜻한 격려**: "틀려도 괜찮아", "이 부분만 보완하면 훨씬 좋아질 거야" 같은 용기를 주는 말을 넣어주세요.
-            3. **질문 유도 (필수)**: "밴드나 카톡으로 언제든 질문해! 쌤이 다 받아줄게!"라는 내용을 꼭 포함해주세요.
-            4. **문체**: 친근한 선생님 말투 (부드러운 해요체).
+            **학생({student_name})에게 줄 따뜻하고 상세한 학습 조언**을 작성하세요.
+            
+            1. **내용**:
+               - "이 문제는 A개념과 B개념이 섞여 있어서 까다로웠을 거야"처럼 학생 입장에서 공감하며 분석해주세요.
+               - "틀려도 괜찮아", "이 부분만 보완하면 훨씬 좋아질 거야" 같은 용기를 주세요.
+               - "밴드나 카톡으로 언제든 질문해! 쌤이 다 받아줄게!"라는 말을 꼭 자연스럽게 섞어주세요.
+            
+            2. **[매우 중요] 형식 및 문체**:
+               - **절대로 '1. 분석', '2. 격려' 같은 번호나 소제목을 붙이지 마세요.**
+               - 선생님이 옆에서 말해주는 것처럼 **자연스러운 대화체(줄글)**로 써주세요.
+               - 친근한 말투(부드러운 해요체 또는 반말 섞어서)로 작성해주세요.
+               - 문단은 보기 좋게 나누되, 번호는 매기지 마세요.
             """
 
         data = {"contents": [{"parts": [{"text": prompt_text}]}]}
@@ -171,7 +185,7 @@ def analyze_homework_ai(student_name, wrong_numbers, assignment_text, type_name=
         return f"통신 에러: {e}"
 
 # ==========================================
-# 5. 콜백 함수 (데이터 저장 로직 수정됨)
+# 5. 콜백 함수
 # ==========================================
 def save_counseling_callback(student, date):
     raw = st.session_state.get('c_raw_input', "")
@@ -187,31 +201,24 @@ def save_counseling_callback(student, date):
         st.toast("⚠️ 내용이 없어 저장하지 않았습니다.")
 
 def save_grades_callback(student, period):
-    # [NEW] 과제명 & 시험명
     hw_name = st.session_state.get('g_hw_name', "-")
     ach_name = st.session_state.get('g_ach_name', "-")
 
-    # 주간 과제 데이터
     hw = st.session_state.get('g_hw', 80)
     w_sc = st.session_state.get('g_w_sc', 0)
     w_av = st.session_state.get('g_w_av', 0)
     wrong = st.session_state.get('g_wrong', "")
-    
     w_analysis = st.session_state.get('g_w_analysis', "")
 
-    # 특이사항 (태도)
     raw_m = st.session_state.get('g_raw_m', "")
     final_m = st.session_state.get('g_final_m', "")
     save_m = final_m.strip() if final_m.strip() else raw_m.strip()
     
-    # 성취도 평가 데이터
     a_sc = st.session_state.get('g_a_sc', 0)
     a_av = st.session_state.get('g_a_av', 0)
     a_wrong = st.session_state.get('g_a_wrong', "")
-    
     a_analysis = st.session_state.get('g_a_analysis', "")
 
-    # 총평
     raw_r = st.session_state.get('g_raw_r', "")
     final_r = st.session_state.get('g_final_r', "")
     save_r = final_r.strip() if final_r.strip() else raw_r.strip()
@@ -219,18 +226,16 @@ def save_grades_callback(student, period):
     sorted_wrong = sort_numbers_string(wrong)
     sorted_a_wrong = sort_numbers_string(a_wrong)
     
-    # [데이터 저장 순서] (시트 헤더와 일치해야 함!)
     row = [
         student, period, 
-        hw_name, hw, w_sc, w_av, sorted_wrong, w_analysis, # 과제명 추가됨
+        hw_name, hw, w_sc, w_av, sorted_wrong, w_analysis, 
         save_m,
-        ach_name, a_sc, a_av, sorted_a_wrong, a_analysis, # 시험명 추가됨
+        ach_name, a_sc, a_av, sorted_a_wrong, a_analysis, 
         save_r
     ]
     
     if add_row_to_sheet("weekly", row):
         st.toast(f"✅ {student} 성적 및 모든 분석 저장 완료!")
-        # 초기화 (이름 필드도 초기화)
         keys = ['g_hw_name', 'g_hw', 'g_w_sc', 'g_w_av', 'g_wrong', 'g_w_analysis', 
                 'g_raw_m', 'g_final_m', 
                 'g_ach_name', 'g_a_sc', 'g_a_av', 'g_a_wrong', 'g_a_analysis', 
@@ -322,7 +327,7 @@ elif menu == "학생 관리 (상담/성적)":
                 wk = c2.selectbox("주차", [f"{i}주차" for i in range(1, 6)])
                 period = f"{mon} {wk}"
 
-                # 초기화 (이름 필드 포함)
+                # 초기화
                 keys = ['g_hw_name', 'g_hw', 'g_w_sc', 'g_w_av', 'g_wrong', 'g_w_analysis', 
                         'g_raw_m', 'g_final_m', 
                         'g_ach_name', 'g_a_sc', 'g_a_av', 'g_a_wrong', 'g_a_analysis', 
@@ -332,11 +337,9 @@ elif menu == "학생 관리 (상담/성적)":
                     if k not in st.session_state:
                          st.session_state[k] = 80 if k == 'g_hw' else (0 if 'sc' in k or 'av' in k else "")
 
-                # 1. 주간 과제 섹션
+                # 1. 주간 과제
                 st.markdown("##### 📝 주간 과제 & 점수")
-                # [NEW] 과제명 입력칸
                 st.text_input("📚 과제장 이름", placeholder="예: 쎈 수1, 마플시너지", key="g_hw_name")
-                
                 cc1, cc2, cc3 = st.columns(3)
                 st.number_input("수행도(%)", 0, 100, key="g_hw")
                 st.number_input("주간 과제 점수", 0, 100, key="g_w_sc")
@@ -363,7 +366,7 @@ elif menu == "학생 관리 (상담/성적)":
                 st.text_area("주간 과제 분석 결과 (자동 생성)", height=150, key="g_w_analysis")
                 st.divider()
 
-                # 2. 태도 및 특이사항
+                # 2. 태도
                 st.markdown("##### 📢 학습 태도 및 특이사항")
                 raw_m = st.text_area("태도 메모", height=80, key="g_raw_m")
                 if st.button("✨ 문체 교정", key="btn_m_ai"):
@@ -374,11 +377,9 @@ elif menu == "학생 관리 (상담/성적)":
                 st.text_area("최종 특이사항", height=80, key="g_final_m")
                 st.divider()
 
-                # 3. 성취도 평가 섹션
+                # 3. 성취도
                 st.markdown("##### 🏆 성취도 평가")
-                # [NEW] 시험명 입력칸
-                st.text_input("📄 시험지 이름", placeholder="예: 3월 월례고사, 1단원 테스트", key="g_ach_name")
-                
+                st.text_input("📄 시험지 이름", placeholder="예: 3월 월례고사", key="g_ach_name")
                 cc4, cc5 = st.columns(2)
                 st.number_input("성취도 평가 점수", 0, 100, key="g_a_sc")
                 st.number_input("성취도 평가 점수 평균", 0, 100, key="g_a_av")
@@ -402,7 +403,7 @@ elif menu == "학생 관리 (상담/성적)":
                             st.rerun()
 
                 st.text_area("성취도 분석 결과 (자동 생성)", height=150, key="g_a_analysis")
-                st.markdown("##### 📝 성취도 총평 (종합 의견)")
+                st.markdown("##### 📝 성취도 총평")
                 raw_r = st.text_area("총평 메모", height=80, key="g_raw_r")
                 if st.button("✨ 문체 교정 (총평)", key="btn_r_ai"):
                     with st.spinner("변환 중..."):
@@ -413,7 +414,7 @@ elif menu == "학생 관리 (상담/성적)":
                 st.divider()
                 st.button("💾 전체 성적 및 분석 저장", type="primary", use_container_width=True, on_click=save_grades_callback, args=(selected_student, period))
 
-            # --- [탭 3] 리포트 (뽀로롱 기능) ---
+            # --- [탭 3] 리포트 ---
             elif selected_tab == "👨‍👩‍👧‍👦 리포트":
                 st.header(f"📑 {selected_student} 학습 리포트 마법사")
                 st.divider()
@@ -425,7 +426,6 @@ elif menu == "학생 관리 (상담/성적)":
                         sel_p = st.selectbox("기간을 선택하세요:", periods)
                         row_data = my_w[my_w["시기"] == sel_p].iloc[0]
 
-                        # 뽀로롱 항목 선택
                         st.subheader("✨ 보고 싶은 항목을 선택하세요")
                         col_chk1, col_chk2, col_chk3, col_chk4 = st.columns(4)
                         show_score = col_chk1.checkbox("📊 점수표", value=True)
@@ -438,7 +438,6 @@ elif menu == "학생 관리 (상담/성적)":
                         
                         if show_score:
                             st.info("📊 **성적 요약**")
-                            # [NEW] 리포트에 이름 표시
                             st.write(f"📘 **과제명:** {row_data.get('과제명', '-')}")
                             st.write(f"📄 **시험명:** {row_data.get('시험명', '-')}")
                             metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
