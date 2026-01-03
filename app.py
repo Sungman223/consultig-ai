@@ -7,7 +7,7 @@ import json
 import datetime
 import altair as alt
 import re
-from pypdf import PdfReader  # [추가] PDF 읽기용 라이브러리
+from pypdf import PdfReader
 
 # ==========================================
 # 1. 페이지 설정
@@ -113,40 +113,70 @@ def refine_text_ai(raw_text, context_type, student_name):
     except Exception as e:
         return f"통신 에러: {e}"
 
-# [기능 업데이트] PDF 텍스트 분석 및 대책 생성
-def analyze_homework_ai(student_name, wrong_numbers, assignment_text):
+# [AI 분석 함수] - 학부모용 vs 학생용(따뜻한 버전)
+def analyze_homework_ai(student_name, wrong_numbers, assignment_text, type_name="과제", target_audience="학부모 전송용"):
     if not wrong_numbers or not assignment_text:
-        return "오답 번호와 과제 내용이 필요합니다."
+        return "오답 번호와 PDF 내용이 필요합니다."
     
     try:
         api_key = st.secrets["GENAI_API_KEY"]
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
         headers = {'Content-Type': 'application/json'}
         
-        # 프롬프트: PDF에서 추출된 텍스트는 수식이 깨질 수 있음을 감안하도록 지시
-        prompt_text = f"""
-        당신은 입시 수학 학원 선생님입니다.
-        학생 이름: {student_name}
-        학생이 틀린 문제 번호: {wrong_numbers}
-        
-        아래는 이번 과제(시험) PDF에서 추출한 텍스트입니다. 
-        (수식이나 기호가 일부 깨져있을 수 있으니 문맥을 통해 문제 유형을 유추하세요.)
-        ---
-        {assignment_text[:10000]} 
-        (텍스트가 너무 길면 앞부분 10000자만 제공됨)
-        ---
+        # ---------------------------------------------------------
+        # 1. 학부모 전송용 프롬프트 (기존 유지)
+        # ---------------------------------------------------------
+        if target_audience == "학부모 전송용":
+            prompt_text = f"""
+            당신은 신뢰감 있는 입시 수학 선생님입니다.
+            학생 이름: {student_name}
+            틀린 문제: {wrong_numbers}
+            분석 대상: {type_name}
+            
+            [과제/시험 텍스트 일부]:
+            {assignment_text[:15000]}
+            
+            [요청 사항]
+            **학부모님께 보낼 피드백 메시지**를 작성하세요.
+            1. 학생이 틀린 문제들이 어떤 수학적 개념(유형)인지 전문가처럼 간략히 분석해주세요.
+            2. 부모님이 안심할 수 있도록 아래 3가지 대책을 포함해주세요:
+               - 수업 시간 내 해당 문항 상세 해설 진행
+               - 밴드(Band)에 해설 영상 업로드 완료
+               - 카카오톡 또는 대면을 통한 1:1 개별 질문 해결
+            3. 문체: 정중하고 예의 바른 '해요체' (너무 딱딱하지 않게).
+            4. 구성: 인사 생략, 분석 내용 -> 관리 계획 순서.
+            """
+            
+        # ---------------------------------------------------------
+        # 2. 학생 배부용 프롬프트 (따뜻하고 상세하게 수정됨)
+        # ---------------------------------------------------------
+        else:
+            prompt_text = f"""
+            당신은 학생을 진심으로 아끼는 따뜻하고 친절한 수학 멘토 선생님입니다.
+            학생 이름: {student_name}
+            틀린 문제: {wrong_numbers}
+            분석 대상: {type_name}
+            
+            [과제/시험 텍스트 일부]:
+            {assignment_text[:15000]}
+            
+            [요청 사항]
+            **학생({student_name})에게 줄 따뜻하고 상세한 학습 가이드**를 작성하세요.
+            
+            1. **상세한 유형 분석**: 
+               - 단순히 "너 이거 틀렸어"가 아니라, "이 문제는 A개념과 B개념이 섞여 있어서 접근하기 조금 까다로웠을 거야"라는 식으로 학생 입장에서 공감하며 문제의 핵심 원리를 자세히 설명해주세요.
+            
+            2. **따뜻한 격려와 학습 방향**:
+               - "틀려도 괜찮아, 지금 알면 돼", "이 부분만 보완하면 훨씬 좋아질 거야" 같은 용기를 주는 말을 꼭 넣어주세요.
+               - 구체적으로 어떤 공식을 다시 보면 좋을지 팁을 주세요.
+            
+            3. **질문 유도 (필수)**:
+               - "혼자 끙끙 앓지 말고, 언제든 **밴드**나 **카톡**으로 쌤한테 질문해! 밤 늦게도 괜찮아, 쌤이 다 받아줄게!" 라는 뉘앙스로 마무리해주세요.
+            
+            4. **문체**: 
+               - 친근한 선생님 말투 (반말과 존댓말을 자연스럽게 섞거나, 부드러운 해요체 사용). 딱딱하지 않게.
+            """
 
-        [요청 사항]
-        학부모님께 보낼 문자를 작성해주세요.
-        1. 텍스트에서 '학생이 틀린 번호'의 문제를 찾아 어떤 유형/개념인지 간략히 분석해주세요. (예: 21번은 미분가능성 문제입니다.)
-        2. 대책으로는 반드시 다음 3가지를 포함하여 안심시켜주세요:
-           - 해당 문항에 대한 수업 시간 내 상세 해설 진행
-           - 밴드(Band)에 해설 영상 업로드 제공
-           - 카카오톡 또는 대면을 통한 개별 1:1 질문 해결 및 관리
-        3. 문체는 정중하고 신뢰감 있게(해요체), 너무 길지 않게 작성해주세요.
-        4. 첫 인사는 생략하고 본론부터 작성해주세요.
-        """
-        
         data = {"contents": [{"parts": [{"text": prompt_text}]}]}
         response = requests.post(url, headers=headers, data=json.dumps(data))
         if response.status_code == 200:
@@ -197,6 +227,7 @@ def save_grades_callback(student, period):
     
     if add_row_to_sheet("weekly", row):
         st.toast(f"✅ {student} 성적 저장 완료! 입력창을 비웠습니다.")
+        # 모든 입력창 초기화
         st.session_state['g_hw'] = 80
         st.session_state['g_w_sc'] = 0
         st.session_state['g_w_av'] = 0
@@ -208,8 +239,8 @@ def save_grades_callback(student, period):
         st.session_state['g_a_wrong'] = ""
         st.session_state['g_raw_r'] = ""
         st.session_state['g_final_r'] = ""
-        # PDF 텍스트 세션도 초기화
         if 'g_pdf_text' in st.session_state: st.session_state['g_pdf_text'] = ""
+        if 'g_ach_pdf_text' in st.session_state: st.session_state['g_ach_pdf_text'] = ""
 
 # ==========================================
 # 6. 메인 앱 화면
@@ -319,7 +350,10 @@ elif menu == "학생 관리 (상담/성적)":
                 if 'g_a_wrong' not in st.session_state: st.session_state['g_a_wrong'] = ""
                 if 'g_raw_r' not in st.session_state: st.session_state['g_raw_r'] = ""
                 if 'g_final_r' not in st.session_state: st.session_state['g_final_r'] = ""
+                
+                # PDF 텍스트 저장용 세션
                 if 'g_pdf_text' not in st.session_state: st.session_state['g_pdf_text'] = ""
+                if 'g_ach_pdf_text' not in st.session_state: st.session_state['g_ach_pdf_text'] = ""
 
                 st.markdown("##### 📝 주간 과제 & 점수")
                 cc1, cc2, cc3 = st.columns(3)
@@ -328,14 +362,9 @@ elif menu == "학생 관리 (상담/성적)":
                 st.number_input("주간과제 평균점수", 0, 100, key="g_w_av")
                 st.text_input("주간 과제 오답 번호", placeholder="예: 3 1 2", key="g_wrong")
                 
-                # -----------------------------------------------------
-                # [NEW] PDF 드래그 앤 드롭 분석 섹션
-                # -----------------------------------------------------
-                with st.expander("✨ [AI] 과제 PDF 오답 분석 및 대책 수립", expanded=True):
-                    # [변경] 파일 업로더 사용
-                    uploaded_file = st.file_uploader("📄 과제 PDF 파일을 이곳에 드래그하거나 선택하세요", type=["pdf"])
-                    
-                    # 파일이 업로드되면 텍스트 추출
+                # --- [주간과제] PDF 분석 ---
+                with st.expander("✨ [AI] 주간과제 오답 분석", expanded=False):
+                    uploaded_file = st.file_uploader("📄 과제 PDF 파일 업로드", type=["pdf"], key="file_homework")
                     if uploaded_file is not None:
                         try:
                             reader = PdfReader(uploaded_file)
@@ -346,28 +375,27 @@ elif menu == "학생 관리 (상담/성적)":
                             st.success(f"PDF 로드 성공! (총 {len(reader.pages)}페이지)")
                         except Exception as e:
                             st.error(f"PDF 읽기 실패: {e}")
+                    
+                    target_h = st.radio("분석 글 대상 선택:", ["학부모 전송용", "학생 배부용"], horizontal=True, key="target_h")
 
-                    if st.button("🚀 오답 분석 및 대책 생성", type="secondary"):
+                    if st.button("🚀 주간과제 분석 실행", type="secondary"):
                         wrong_nums = st.session_state.get('g_wrong', "")
                         pdf_text = st.session_state.get('g_pdf_text', "")
 
                         if not wrong_nums.strip():
-                            st.error("먼저 '주간 과제 오답 번호'를 입력해주세요!")
+                            st.error("오답 번호를 입력해주세요!")
                         elif not pdf_text.strip():
                             st.error("PDF 파일을 업로드해주세요!")
                         else:
-                            with st.spinner("Gemini가 PDF 내용을 분석하고 대책을 만드는 중입니다..."):
-                                analysis_msg = analyze_homework_ai(selected_student, wrong_nums, pdf_text)
+                            with st.spinner(f"Gemini가 {target_h}으로 분석 중입니다..."):
+                                analysis_msg = analyze_homework_ai(selected_student, wrong_nums, pdf_text, "주간과제", target_h)
                                 st.session_state['g_raw_m'] = analysis_msg
                                 st.rerun()
-                # -----------------------------------------------------
-
-                st.divider()
-
+                
                 st.markdown("##### 📢 학습 태도 및 특이사항")
                 raw_m = st.text_area("특이사항 메모", height=150, key="g_raw_m")
                 
-                if st.button("✨ 단순 문체 교정 (입력한 내용만 다듬기)", key="btn_m_ai"):
+                if st.button("✨ 문체 교정 (AI)", key="btn_m_ai"):
                     with st.spinner("변환 중..."):
                         res = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
                         st.session_state['g_final_m'] = res
@@ -383,14 +411,44 @@ elif menu == "학생 관리 (상담/성적)":
                 st.number_input("성취도 평가 점수 평균", 0, 100, key="g_a_av")
                 st.text_input("성취도평가 오답번호", placeholder="예: 21 29 30", key="g_a_wrong")
                 
+                # --- [성취도평가] PDF 분석 ---
+                with st.expander("✨ [AI] 성취도 시험지 분석", expanded=False):
+                    ach_file = st.file_uploader("📄 성취도 시험지 PDF 업로드", type=["pdf"], key="file_achievement")
+                    if ach_file is not None:
+                        try:
+                            reader_ach = PdfReader(ach_file)
+                            ach_text_content = ""
+                            for page in reader_ach.pages:
+                                ach_text_content += page.extract_text() + "\n"
+                            st.session_state['g_ach_pdf_text'] = ach_text_content
+                            st.success(f"시험지 로드 성공! (총 {len(reader_ach.pages)}페이지)")
+                        except Exception as e:
+                            st.error(f"PDF 읽기 실패: {e}")
+
+                    target_a = st.radio("분석 글 대상 선택:", ["학부모 전송용", "학생 배부용"], horizontal=True, key="target_a")
+
+                    if st.button("🚀 성취도 오답 분석 실행", type="secondary"):
+                        a_wrong_nums = st.session_state.get('g_a_wrong', "")
+                        a_pdf_text = st.session_state.get('g_ach_pdf_text', "")
+
+                        if not a_wrong_nums.strip():
+                            st.error("성취도 오답 번호를 입력해주세요!")
+                        elif not a_pdf_text.strip():
+                            st.error("시험지 PDF를 업로드해주세요!")
+                        else:
+                            with st.spinner(f"Gemini가 {target_a}으로 분석 중입니다..."):
+                                analysis_msg = analyze_homework_ai(selected_student, a_wrong_nums, a_pdf_text, "성취도평가", target_a)
+                                st.session_state['g_raw_r'] = analysis_msg
+                                st.rerun()
+
                 st.markdown("##### 📝 성취도 총평")
-                raw_r = st.text_area("총평 메모", height=70, key="g_raw_r")
-                if st.button("✨ 총평 AI 변환", key="btn_r_ai"):
+                raw_r = st.text_area("총평 메모", height=150, key="g_raw_r")
+                if st.button("✨ 단순 문체 교정 (AI)", key="btn_r_ai"):
                     with st.spinner("변환 중..."):
                         res = refine_text_ai(raw_r, "성취도 평가 총평", selected_student)
                         st.session_state['g_final_r'] = res
                         st.rerun()
-                st.text_area("최종 총평", height=80, key="g_final_r")
+                st.text_area("최종 총평", height=100, key="g_final_r")
                 
                 st.divider()
                 
