@@ -7,6 +7,7 @@ import json
 import datetime
 import altair as alt
 import re
+from pypdf import PdfReader  # [추가] PDF 읽기용 라이브러리
 
 # ==========================================
 # 1. 페이지 설정
@@ -112,29 +113,32 @@ def refine_text_ai(raw_text, context_type, student_name):
     except Exception as e:
         return f"통신 에러: {e}"
 
-# [신규 기능] 과제 오답 분석 및 대책 생성 함수
+# [기능 업데이트] PDF 텍스트 분석 및 대책 생성
 def analyze_homework_ai(student_name, wrong_numbers, assignment_text):
     if not wrong_numbers or not assignment_text:
-        return "오답 번호와 과제 텍스트를 모두 입력해주세요."
+        return "오답 번호와 과제 내용이 필요합니다."
     
     try:
         api_key = st.secrets["GENAI_API_KEY"]
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
         headers = {'Content-Type': 'application/json'}
         
+        # 프롬프트: PDF에서 추출된 텍스트는 수식이 깨질 수 있음을 감안하도록 지시
         prompt_text = f"""
         당신은 입시 수학 학원 선생님입니다.
         학생 이름: {student_name}
         학생이 틀린 문제 번호: {wrong_numbers}
         
-        아래는 이번 과제(시험)의 전체 텍스트입니다:
+        아래는 이번 과제(시험) PDF에서 추출한 텍스트입니다. 
+        (수식이나 기호가 일부 깨져있을 수 있으니 문맥을 통해 문제 유형을 유추하세요.)
         ---
-        {assignment_text}
+        {assignment_text[:10000]} 
+        (텍스트가 너무 길면 앞부분 10000자만 제공됨)
         ---
 
         [요청 사항]
         학부모님께 보낼 문자를 작성해주세요.
-        1. 제공된 텍스트에서 학생이 틀린 번호의 문제 내용을 찾아서, 어떤 유형/개념의 문제인지 간략히 분석해주세요. (수식이 깨져있다면 문맥으로 유추하세요)
+        1. 텍스트에서 '학생이 틀린 번호'의 문제를 찾아 어떤 유형/개념인지 간략히 분석해주세요. (예: 21번은 미분가능성 문제입니다.)
         2. 대책으로는 반드시 다음 3가지를 포함하여 안심시켜주세요:
            - 해당 문항에 대한 수업 시간 내 상세 해설 진행
            - 밴드(Band)에 해설 영상 업로드 제공
@@ -153,7 +157,7 @@ def analyze_homework_ai(student_name, wrong_numbers, assignment_text):
         return f"통신 에러: {e}"
 
 # ==========================================
-# 5. 콜백 함수 (저장 및 초기화)
+# 5. 콜백 함수
 # ==========================================
 def save_counseling_callback(student, date):
     raw = st.session_state.get('c_raw_input', "")
@@ -193,7 +197,6 @@ def save_grades_callback(student, period):
     
     if add_row_to_sheet("weekly", row):
         st.toast(f"✅ {student} 성적 저장 완료! 입력창을 비웠습니다.")
-        # 모든 입력창 초기화
         st.session_state['g_hw'] = 80
         st.session_state['g_w_sc'] = 0
         st.session_state['g_w_av'] = 0
@@ -205,8 +208,8 @@ def save_grades_callback(student, period):
         st.session_state['g_a_wrong'] = ""
         st.session_state['g_raw_r'] = ""
         st.session_state['g_final_r'] = ""
-        # [추가] 과제 텍스트도 초기화
-        if 'g_assignment_text' in st.session_state: st.session_state['g_assignment_text'] = ""
+        # PDF 텍스트 세션도 초기화
+        if 'g_pdf_text' in st.session_state: st.session_state['g_pdf_text'] = ""
 
 # ==========================================
 # 6. 메인 앱 화면
@@ -238,13 +241,11 @@ elif menu == "학생 관리 (상담/성적)":
     df_students = load_data_from_sheet("students")
     
     if df_students.empty:
-        st.warning("등록된 학생 데이터가 없습니다. 먼저 학생을 등록해주세요.")
+        st.warning("등록된 학생 데이터가 없습니다.")
     else:
-        # 반/학생 선택 로직
         if '반' in df_students.columns:
             ban_list = sorted(df_students['반'].unique().tolist())
             selected_ban = st.sidebar.selectbox("📂 반 선택", ban_list)
-            
             filtered_students = df_students[df_students['반'] == selected_ban]
             student_list = sorted(filtered_students['이름'].tolist())
             
@@ -297,7 +298,7 @@ elif menu == "학생 관리 (상담/성적)":
                 final_c = st.text_area("2. 최종 내용", height=150, key="c_final_input")
                 st.button("💾 상담 내용 저장", type="primary", on_click=save_counseling_callback, args=(selected_student, c_date))
 
-            # --- [탭 2] 성적 입력 (AI 분석 기능 추가) ---
+            # --- [탭 2] 성적 입력 ---
             elif selected_tab == "📊 성적 입력":
                 st.subheader("📊 성적 데이터 입력")
                 
@@ -318,8 +319,7 @@ elif menu == "학생 관리 (상담/성적)":
                 if 'g_a_wrong' not in st.session_state: st.session_state['g_a_wrong'] = ""
                 if 'g_raw_r' not in st.session_state: st.session_state['g_raw_r'] = ""
                 if 'g_final_r' not in st.session_state: st.session_state['g_final_r'] = ""
-                # [신규] 과제 텍스트 저장용 변수
-                if 'g_assignment_text' not in st.session_state: st.session_state['g_assignment_text'] = ""
+                if 'g_pdf_text' not in st.session_state: st.session_state['g_pdf_text'] = ""
 
                 st.markdown("##### 📝 주간 과제 & 점수")
                 cc1, cc2, cc3 = st.columns(3)
@@ -329,22 +329,35 @@ elif menu == "학생 관리 (상담/성적)":
                 st.text_input("주간 과제 오답 번호", placeholder="예: 3 1 2", key="g_wrong")
                 
                 # -----------------------------------------------------
-                # [NEW] 오답 문항 자동 분석 섹션
+                # [NEW] PDF 드래그 앤 드롭 분석 섹션
                 # -----------------------------------------------------
-                with st.expander("✨ [AI] 과제 오답 분석 및 학부모 전송 문구 생성", expanded=True):
-                    st.caption("PDF 과제 파일에서 텍스트를 복사(Ctrl+A, Ctrl+C)해서 아래에 붙여넣으세요.")
-                    assignment_text = st.text_area("과제 전체 텍스트 붙여넣기", height=100, key="g_assignment_text")
+                with st.expander("✨ [AI] 과제 PDF 오답 분석 및 대책 수립", expanded=True):
+                    # [변경] 파일 업로더 사용
+                    uploaded_file = st.file_uploader("📄 과제 PDF 파일을 이곳에 드래그하거나 선택하세요", type=["pdf"])
                     
+                    # 파일이 업로드되면 텍스트 추출
+                    if uploaded_file is not None:
+                        try:
+                            reader = PdfReader(uploaded_file)
+                            text_content = ""
+                            for page in reader.pages:
+                                text_content += page.extract_text() + "\n"
+                            st.session_state['g_pdf_text'] = text_content
+                            st.success(f"PDF 로드 성공! (총 {len(reader.pages)}페이지)")
+                        except Exception as e:
+                            st.error(f"PDF 읽기 실패: {e}")
+
                     if st.button("🚀 오답 분석 및 대책 생성", type="secondary"):
                         wrong_nums = st.session_state.get('g_wrong', "")
+                        pdf_text = st.session_state.get('g_pdf_text', "")
+
                         if not wrong_nums.strip():
                             st.error("먼저 '주간 과제 오답 번호'를 입력해주세요!")
-                        elif not assignment_text.strip():
-                            st.error("과제 텍스트를 붙여넣어 주세요!")
+                        elif not pdf_text.strip():
+                            st.error("PDF 파일을 업로드해주세요!")
                         else:
-                            with st.spinner("Gemini가 문제를 분석하고 대책을 수립 중입니다..."):
-                                analysis_msg = analyze_homework_ai(selected_student, wrong_nums, assignment_text)
-                                # 결과는 '특이사항 메모'에 자동 입력
+                            with st.spinner("Gemini가 PDF 내용을 분석하고 대책을 만드는 중입니다..."):
+                                analysis_msg = analyze_homework_ai(selected_student, wrong_nums, pdf_text)
                                 st.session_state['g_raw_m'] = analysis_msg
                                 st.rerun()
                 # -----------------------------------------------------
@@ -352,17 +365,15 @@ elif menu == "학생 관리 (상담/성적)":
                 st.divider()
 
                 st.markdown("##### 📢 학습 태도 및 특이사항")
-                # AI가 생성한 분석 내용이 여기로 들어옵니다
-                raw_m = st.text_area("특이사항 메모 (자동 생성됨)", height=150, key="g_raw_m")
+                raw_m = st.text_area("특이사항 메모", height=150, key="g_raw_m")
                 
-                # 기존 단순 문체 교정 버튼 (필요시 사용)
                 if st.button("✨ 단순 문체 교정 (입력한 내용만 다듬기)", key="btn_m_ai"):
                     with st.spinner("변환 중..."):
                         res = refine_text_ai(raw_m, "학습 태도 특이사항", selected_student)
                         st.session_state['g_final_m'] = res
                         st.rerun()
                 
-                st.text_area("최종 특이사항 (저장될 내용)", height=100, key="g_final_m")
+                st.text_area("최종 특이사항", height=100, key="g_final_m")
                 
                 st.divider()
 
